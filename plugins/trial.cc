@@ -62,6 +62,9 @@ trial::trial(const edm::ParameterSet& iConfig)
       rootFile_(nullptr) {
   // Initialize ROOT file
   rootFile_ = new TFile("config_output.root", "RECREATE");
+
+  // Register the product that this module will produce
+  produces<std::vector<int>>("outputHits");
 }
 
 trial::~trial() {
@@ -87,10 +90,13 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     return;
   }
 
+  // Extract data from the event
+  int32_t eventOffset = iEvent.id().event();
+
   for (const auto& device : devices_) {
     Queue queue(device);
 
-    // Define the hits and moduleStart data
+    // Define moduleStart data
     auto moduleStartH =
         cms::alpakatools::make_host_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
     for (size_t i = 0; i < pixelTopology::Phase1::numberOfModules + 1; ++i) {
@@ -100,25 +106,24 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
     alpaka::memcpy(queue, moduleStartD, moduleStartH);
 
-    TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits_, offset_, moduleStartD.data());
+    // Pass event-based offset to kernel
+    TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits_, eventOffset, moduleStartD.data());
 
     // Execute kernels
     testTrackingRecHitSoA::runKernels<pixelTopology::Phase1>(tkhit.view(), queue);
+
+    // Update data from device back to host
     tkhit.updateFromDevice(queue);
 
-#if defined ALPAKA_ACC_CPU_B_SEQ_T_SEQ_ENABLED or defined ALPAKA_ACC_CPU_B_TBB_T_SEQ_ENABLED
-    TrackingRecHitHost<pixelTopology::Phase1> const& host_collection = tkhit;
-#else
     TrackingRecHitHost<pixelTopology::Phase1> host_collection =
         cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkhit);
-#endif
 
-    // Wait for the kernel and potential copy to complete
+    // Wait for kernel completion
     alpaka::wait(queue);
 
     // Perform assertions
     assert(tkhit.nHits() == nHits_);
-    assert(tkhit.offsetBPIX2() == 22);
+    assert(tkhit.offsetBPIX2() == eventOffset);
     assert(tkhit.nHits() == host_collection.nHits());
     assert(tkhit.offsetBPIX2() == host_collection.offsetBPIX2());
   }

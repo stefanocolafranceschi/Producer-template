@@ -18,47 +18,6 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
   using namespace cms::alpakatools;
   namespace testTrackingRecHitSoA {
 
-    template <typename TrackerTraits>    
-    struct TestFillKernel {
-      template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
-      ALPAKA_FN_ACC void operator()(TAcc const& acc, TrackingRecHitSoAView<TrackerTraits> soa) const {
-
-        const uint32_t i(alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0u]);
-        const uint32_t j(alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]);
-
-        //printf("Thread Index [i] in the Grid: %u\n", i);
-        //printf("Thread Index [j] in the Block: %u\n", j);
-
-        // Initialization of global/shared data
-        // once_per_grid does what it says
-        // (put a random number in here and all threads will have the same random number :-()
-        if (cms::alpakatools::once_per_grid(acc)) {
-          soa.offsetBPIX2() = 22;
-        }
-
-        // Using Linear Congruential Generator
-        // i and j of each thread used as seed 
-        uint32_t seed = i + j;
-        float randomValue = (seed * 1664525u + 1013904223u) % 10000 / 1000.0f;  // Linear congruential generator
-        soa[i].xLocal() = randomValue;
-
-        seed = i + j + 1000 ;
-        randomValue = (seed * 1664525u + 1013904223u) % 10000 / 1000.0f;  // Linear congruential generator
-        soa[i].yLocal() = randomValue;
-
-        soa[i].iphi() = i % 10;
-        soa.hitsLayerStart()[j] = j;
-
-        // Print out the initialized values for debugging from each thread!
-        //printf("Thread [i = %u, j = %u] Initialized:\n", i, j);
-        //printf("  xLocal = %f\n", soa[i].xLocal());
-        //printf("  yLocal = %f\n", soa[i].yLocal());
-        //printf("  iphi = %d\n", soa[i].iphi());
-        //printf("  hitsLayerStart[%u] = %d\n", j, soa.hitsLayerStart()[j]);
-
-      }
-    };
-
     template <typename TrackerTraits>
     struct ShowKernel {
       template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
@@ -107,7 +66,6 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
       uint32_t items = 64;
       uint32_t groups = divide_up_by(view.metadata().size(), items);
       auto workDiv = make_workdiv<Acc1D>(groups, items);
-      alpaka::exec<Acc1D>(queue, workDiv, TestFillKernel<TrackerTraits>{}, view);
       alpaka::exec<Acc1D>(queue, workDiv, ShowKernel<TrackerTraits>{}, view);
       alpaka::exec<Acc1D>(queue, workDiv, CheckXLocalKernel<TrackerTraits>{}, view);
     }
