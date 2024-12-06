@@ -6,3 +6,7 @@ For example:
 nHits = 100 (number of hits for one event)
 items = 64 (threads per block).
 This results in groups = ceil(100 / 64) = 2 blocks.
+
+Run with:
+cmsRun python/trial_cfg.py (emtpy source)
+cmsRun python/ttbar.py (points to a step3.root previoulsy produced ttbar)
