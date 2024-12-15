@@ -6,3 +6,8 @@
 <use name="HeterogeneousCore/AlpakaInterface"/>
 <flags EDM_PLUGIN="1"/>
 <flags ALPAKA_BACKENDS="1"/>
+
+<src>
+  src/Cluster_test.dev.cc     
+  src/trial.cc
+</src>

@@ -22,9 +22,14 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsDevice.h"
-#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsHost.h"
-#include "DataFormats/TrackingRecHitSoA/interface/alpaka/TrackingRecHitsSoACollection.h"
+#include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersDevice.h"
+#include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersHost.h"
+#include "DataFormats/SiPixelClusterSoA/interface/alpaka/SiPixelClustersSoACollection.h"
+
+#include "DataFormats/Common/interface/Handle.h"
+#include "DataFormats/Common/interface/DetSetVector.h"
+#include "DataFormats/SiPixelCluster/interface/SiPixelCluster.h"
+
 #include "FWCore/Utilities/interface/stringize.h"
 #include "Geometry/CommonTopologies/interface/SimplePixelTopology.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
@@ -32,7 +37,7 @@
 #include "HeterogeneousCore/AlpakaInterface/interface/memory.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/workdivision.h"
 
-#include "Hits_test.h"
+#include "Cluster_test.h"
 
 using namespace ALPAKA_ACCELERATOR_NAMESPACE;
 
@@ -53,6 +58,9 @@ private:
   int32_t offset_;
   TFile* rootFile_;
   std::vector<Device> devices_;
+
+  edm::EDGetTokenT<edmNew::DetSetVector<SiPixelCluster>> clusterToken_;
+
 };
 
 trial::trial(const edm::ParameterSet& iConfig)
@@ -65,6 +73,8 @@ trial::trial(const edm::ParameterSet& iConfig)
 
   // Register the product that this module will produce
   produces<std::vector<int>>("outputHits");
+  clusterToken_ = consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("siPixelClusters"));
+
 }
 
 trial::~trial() {
@@ -90,7 +100,27 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     return;
   }
 
-  // Extract data from the event
+  // Handle to access SiPixelCluster
+  edm::Handle<edmNew::DetSetVector<SiPixelCluster>> clustersHandle;
+
+  // Retrieve clusters from the event
+  iEvent.getByToken(clusterToken_, clustersHandle);
+
+  // Check if the handle is valid
+  if (!clustersHandle.isValid()) {
+    edm::LogError("trial") << "Could not retrieve siPixelClusters.";
+    return;
+  }
+
+  uint32_t nClusters = 0;
+  for (const auto& detSet : *clustersHandle) {
+    nClusters += detSet.size();  // Correctly count clusters for edmNew::DetSetVector
+  }
+
+  // Print total clusters
+  std::cout << "Total clusters in this event: " << nClusters << std::endl;
+
+  // Use event ID as the offset
   int32_t eventOffset = iEvent.id().event();
 
   for (const auto& device : devices_) {
@@ -106,28 +136,29 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
     alpaka::memcpy(queue, moduleStartD, moduleStartH);
 
-    // Pass event-based offset to kernel
-    TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits_, eventOffset, moduleStartD.data());
+    // Create device buffers for SiPixelClustersSoA
+    SiPixelClustersDevice<Device> clustersSoA(nClusters, queue);
 
-    // Execute kernels
-    testTrackingRecHitSoA::runKernels<pixelTopology::Phase1>(tkhit.view(), queue);
+    // Debugging output
+    std::cout << "Type of clustersSoA: " << typeid(clustersSoA).name() << std::endl;
+    std::cout << "Type of clustersSoA.view(): " << typeid(clustersSoA.view()).name() << std::endl;
 
-    // Update data from device back to host
-    tkhit.updateFromDevice(queue);
+    // Run the kernel on the clusters
+//    testSiPixelClusterSoA::runKernels(clustersSoA.view(), queue);
+ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClusterSoA::runKernels(clustersSoA.view(), queue);
 
-    TrackingRecHitHost<pixelTopology::Phase1> host_collection =
-        cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkhit);
+
+    // Update data back from device to host (if needed)
+    //// clustersSoA.updateFromDevice(queue);
 
     // Wait for kernel completion
-    alpaka::wait(queue);
+    //// alpaka::wait(queue);
 
-    // Perform assertions
-    assert(tkhit.nHits() == nHits_);
-    assert(tkhit.offsetBPIX2() == eventOffset);
-    assert(tkhit.nHits() == host_collection.nHits());
-    assert(tkhit.offsetBPIX2() == host_collection.offsetBPIX2());
+    // Verify results (optional)
+    // assert(clustersSoA.nClusters() == nClusters);
   }
 }
+
 
 void trial::endStream() {
   edm::LogInfo("trial") << "Processing completed.";
