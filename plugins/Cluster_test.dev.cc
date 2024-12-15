@@ -20,8 +20,12 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
         ALPAKA_FN_ACC void operator()(TAcc const& acc, SiPixelClustersSoAConstView soa) const {
             if (cms::alpakatools::once_per_grid(acc)) {
-                printf("Inspecting available members:\n");
+                printf("well this works!\n");
             }
+
+        // Print the position of the cluster (x, y, z)
+        //printf("Cluster %d position: x = %f, y = %f, z = %f\n", clusterIndex, x, y, z);
+
         }
     };
 

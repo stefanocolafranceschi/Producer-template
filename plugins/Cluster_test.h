@@ -4,7 +4,7 @@
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersSoA.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 
-namespace ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClusterSoA {
+namespace ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClustersSoA {
 
   // Corrected function declaration
   void runKernels(SiPixelClustersSoAView& clusters, Queue& queue);

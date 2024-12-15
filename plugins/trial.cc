@@ -144,15 +144,13 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     std::cout << "Type of clustersSoA.view(): " << typeid(clustersSoA.view()).name() << std::endl;
 
     // Run the kernel on the clusters
-//    testSiPixelClusterSoA::runKernels(clustersSoA.view(), queue);
-ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClusterSoA::runKernels(clustersSoA.view(), queue);
-
+    testSiPixelClustersSoA::runKernels(clustersSoA.view(), queue);
 
     // Update data back from device to host (if needed)
-    //// clustersSoA.updateFromDevice(queue);
+    //clustersSoA.updateFromDevice(queue);
 
     // Wait for kernel completion
-    //// alpaka::wait(queue);
+    alpaka::wait(queue);
 
     // Verify results (optional)
     // assert(clustersSoA.nClusters() == nClusters);
