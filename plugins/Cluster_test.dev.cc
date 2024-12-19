@@ -1,9 +1,18 @@
 #include <type_traits>
 #include <alpaka/alpaka.hpp>
 
+#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsDevice.h"
+#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsSoA.h"
+#include "DataFormats/TrackingRecHitSoA/interface/alpaka/TrackingRecHitsSoACollection.h"
+
+#include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisDevice.h"
+#include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisSoA.h"
+#include "DataFormats/SiPixelDigiSoA/interface/alpaka/SiPixelDigisSoACollection.h"
+
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersDevice.h"
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersSoA.h"
 #include "DataFormats/SiPixelClusterSoA/interface/alpaka/SiPixelClustersSoACollection.h"
+
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/traits.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/workdivision.h"
@@ -22,9 +31,21 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
             if (cms::alpakatools::once_per_grid(acc)) {
                 printf("well this works!\n");
             }
+/*
+            printf("Inspecting available members:\n");
+            printf("moduleStart[0]: %u\n", soa.moduleStart(0));
+            printf("clusInModule[0]: %u\n", soa.clusInModule(0));
+            printf("moduleId[0]: %u\n", soa.moduleId(0));
+            printf("clusModuleStart[0]: %u\n", soa.clusModuleStart(0));
+*/
+for (size_t i = 0; i < 5; ++i) {
 
-        // Print the position of the cluster (x, y, z)
-        //printf("Cluster %d position: x = %f, y = %f, z = %f\n", clusterIndex, x, y, z);
+            printf("moduleStart[i]: %u\n", soa.moduleStart(i));
+            printf("clusInModule[i]: %u\n", soa.clusInModule(i));
+            printf("moduleId[i]: %u\n", soa.moduleId(i));
+            printf("clusModuleStart[i]: %u\n", soa.clusModuleStart(i));
+
+}
 
         }
     };

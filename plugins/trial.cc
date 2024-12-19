@@ -22,6 +22,14 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsDevice.h"
+#include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsHost.h"
+#include "DataFormats/TrackingRecHitSoA/interface/alpaka/TrackingRecHitsSoACollection.h"
+
+#include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisDevice.h"
+#include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisHost.h"
+#include "DataFormats/SiPixelDigiSoA/interface/alpaka/SiPixelDigisSoACollection.h"
+
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersDevice.h"
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersHost.h"
 #include "DataFormats/SiPixelClusterSoA/interface/alpaka/SiPixelClustersSoACollection.h"
@@ -60,22 +68,27 @@ private:
   std::vector<Device> devices_;
 
   edm::EDGetTokenT<edmNew::DetSetVector<SiPixelCluster>> clusterToken_;
+  edm::EDGetTokenT<edmNew::DetSetVector<SiPixelDigisSoA>> digisToken_;
+  edm::EDGetTokenT<TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
 
 };
+
 
 trial::trial(const edm::ParameterSet& iConfig)
     : configString_(iConfig.getParameter<std::string>("configString")),
       nHits_(iConfig.getParameter<uint32_t>("nHits")),
       offset_(iConfig.getParameter<int32_t>("offset")),
-      rootFile_(nullptr) {
+      rootFile_(nullptr),
+      clusterToken_(consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("clusterTag"))),
+      digisToken_(consumes<edmNew::DetSetVector<SiPixelDigisSoA>>(iConfig.getParameter<edm::InputTag>("digiTag"))),
+      recHitsToken_(consumes<TrackingRecHitsSoACollection<pixelTopology::Phase1>>(iConfig.getParameter<edm::InputTag>("recHitTag"))) {
   // Initialize ROOT file
   rootFile_ = new TFile("config_output.root", "RECREATE");
 
   // Register the product that this module will produce
   produces<std::vector<int>>("outputHits");
-  clusterToken_ = consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("siPixelClusters"));
-
 }
+
 
 trial::~trial() {
   if (rootFile_) {
@@ -95,66 +108,89 @@ void trial::beginStream(edm::StreamID) {
 }
 
 void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
-  if (devices_.empty()) {
-    edm::LogWarning("trial") << "Skipping event because no devices are available.";
-    return;
-  }
-
-  // Handle to access SiPixelCluster
-  edm::Handle<edmNew::DetSetVector<SiPixelCluster>> clustersHandle;
-
-  // Retrieve clusters from the event
-  iEvent.getByToken(clusterToken_, clustersHandle);
-
-  // Check if the handle is valid
-  if (!clustersHandle.isValid()) {
-    edm::LogError("trial") << "Could not retrieve siPixelClusters.";
-    return;
-  }
-
-  uint32_t nClusters = 0;
-  for (const auto& detSet : *clustersHandle) {
-    nClusters += detSet.size();  // Correctly count clusters for edmNew::DetSetVector
-  }
-
-  // Print total clusters
-  std::cout << "Total clusters in this event: " << nClusters << std::endl;
-
-  // Use event ID as the offset
-  int32_t eventOffset = iEvent.id().event();
-
-  for (const auto& device : devices_) {
-    Queue queue(device);
-
-    // Define moduleStart data
-    auto moduleStartH =
-        cms::alpakatools::make_host_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
-    for (size_t i = 0; i < pixelTopology::Phase1::numberOfModules + 1; ++i) {
-      moduleStartH[i] = i * 2;
+    if (devices_.empty()) {
+        edm::LogWarning("trial") << "Skipping event because no devices are available.";
+        return;
     }
-    auto moduleStartD =
-        cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
-    alpaka::memcpy(queue, moduleStartD, moduleStartH);
 
-    // Create device buffers for SiPixelClustersSoA
-    SiPixelClustersDevice<Device> clustersSoA(nClusters, queue);
+    // Extract data from the event using edmNew
+    edm::Handle<edmNew::DetSetVector<SiPixelCluster>> clustersHandle;
+    iEvent.getByToken(clusterToken_, clustersHandle);
+    if (!clustersHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve SiPixelClusters.";
+        return;
+    }
 
-    // Debugging output
-    std::cout << "Type of clustersSoA: " << typeid(clustersSoA).name() << std::endl;
-    std::cout << "Type of clustersSoA.view(): " << typeid(clustersSoA.view()).name() << std::endl;
+    edm::Handle<edmNew::DetSetVector<SiPixelDigisSoA>> digisHandle;
+    iEvent.getByToken(digisToken_, digisHandle);
+    if (!digisHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve SiPixelDigisSoA.";
+        return;
+    }
 
-    // Run the kernel on the clusters
-    testSiPixelClustersSoA::runKernels(clustersSoA.view(), queue);
+    // Handle to access TrackingRecHitsSoACollection (Phase 1)
+    edm::Handle<TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsHandle;
+    iEvent.getByToken(recHitsToken_, recHitsHandle);
+    // Check if the handle is valid
+    if (!recHitsHandle.isValid()) {
+      edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
+      return;
+    }
 
-    // Update data back from device to host (if needed)
-    //clustersSoA.updateFromDevice(queue);
+    // Now you can process the retrieved data
+    uint32_t nClusters = 0;
+    for (const auto& detSet : *clustersHandle) {
+        nClusters += detSet.size();
+    }
+    std::cout << "Total clusters in this event: " << nClusters << std::endl;
 
-    // Wait for kernel completion
-    alpaka::wait(queue);
+    // Iterate over the DetSetVector to get the number of digis
+    size_t nDigis = 0;
+    for (const auto& detSet : *digisHandle) {
+        nDigis += detSet.size();
+    }
+    std::cout << "Number of digis: " << nDigis << std::endl;
 
-    // Verify results (optional)
-    // assert(clustersSoA.nClusters() == nClusters);
-  }
+
+    // Process the hits
+    const auto& hits = *recHitsHandle;
+    std::cout << "Number of hits: " << hits.nHits() << std::endl;
+
+    // Use event ID as the offset
+    int32_t eventOffset = iEvent.id().event();
+
+    for (const auto& device : devices_) {
+      Queue queue(device);
+
+      // Define moduleStart data
+      auto moduleStartH =
+          cms::alpakatools::make_host_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
+      for (size_t i = 0; i < pixelTopology::Phase1::numberOfModules + 1; ++i) {
+        moduleStartH[i] = i * 2;
+      }
+      auto moduleStartD =
+          cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
+      alpaka::memcpy(queue, moduleStartD, moduleStartH);
+
+      // Create device buffers for SiPixelClustersSoA
+      SiPixelClustersDevice<Device> clustersSoA(nClusters, queue);
+
+      // Debugging output
+      std::cout << "Type of clustersSoA: " << typeid(clustersSoA).name() << std::endl;
+      std::cout << "Type of clustersSoA.view(): " << typeid(clustersSoA.view()).name() << std::endl;
+
+      // Run the kernel on the clusters
+      testSiPixelClustersSoA::runKernels(clustersSoA.view(), queue);
+
+      // Update data back from device to host (if needed)
+      //clustersSoA.updateFromDevice(queue);
+
+      // Wait for kernel completion
+      alpaka::wait(queue);
+
+      // Verify results (optional)
+      // assert(clustersSoA.nClusters() == nClusters);
+    }
 }
 
 
