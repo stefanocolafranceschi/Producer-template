@@ -18,10 +18,10 @@ process.source = cms.Source("PoolSource",
 process.trial = cms.EDProducer("trial",
     configString=cms.string("This is my configuration string"),
     nHits=cms.uint32(100),
-    offset=cms.int32(10),
-    clusterTag=cms.InputTag("siPixelClusters"),  # Input for clusters
-    digiTag=cms.InputTag("siPixelDigis"),       # Input for digis
-    recHitTag=cms.InputTag("trackingRecHits")   # Input for tracking hits
+    offset=cms.int32(10)
+    #clusterTag=cms.InputTag("siPixelClusters"),  # Input for clusters
+    #digiTag=cms.InputTag("siPixelDigis"),       # Input for digis
+    #recHitTag=cms.InputTag("trackingRecHits")   # Input for tracking hits
 )
 
 process.p = cms.Path(process.trial)

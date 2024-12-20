@@ -69,8 +69,6 @@ private:
 
   edm::EDGetTokenT<edmNew::DetSetVector<SiPixelCluster>> clusterToken_;
   edm::EDGetTokenT<edmNew::DetSetVector<SiPixelDigisSoA>> digisToken_;
-  edm::EDGetTokenT<TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
-
 };
 
 
@@ -79,14 +77,14 @@ trial::trial(const edm::ParameterSet& iConfig)
       nHits_(iConfig.getParameter<uint32_t>("nHits")),
       offset_(iConfig.getParameter<int32_t>("offset")),
       rootFile_(nullptr),
-      clusterToken_(consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("clusterTag"))),
-      digisToken_(consumes<edmNew::DetSetVector<SiPixelDigisSoA>>(iConfig.getParameter<edm::InputTag>("digiTag"))),
-      recHitsToken_(consumes<TrackingRecHitsSoACollection<pixelTopology::Phase1>>(iConfig.getParameter<edm::InputTag>("recHitTag"))) {
-  // Initialize ROOT file
-  rootFile_ = new TFile("config_output.root", "RECREATE");
+      clusterToken_(consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("siPixelClusters"))),  // Close this parentheses
+      digisToken_(consumes<edmNew::DetSetVector<SiPixelDigisSoA>>(edm::InputTag("SiPixelDigisSoA"))) // Close this parentheses
+{
+    // Initialize ROOT file
+    rootFile_ = new TFile("config_output.root", "RECREATE");
 
-  // Register the product that this module will produce
-  produces<std::vector<int>>("outputHits");
+    // Register the product that this module will produce
+    produces<std::vector<int>>("outputHits");
 }
 
 
@@ -127,7 +125,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         edm::LogError("trial") << "Could not retrieve SiPixelDigisSoA.";
         return;
     }
-
+/*
     // Handle to access TrackingRecHitsSoACollection (Phase 1)
     edm::Handle<TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsHandle;
     iEvent.getByToken(recHitsToken_, recHitsHandle);
@@ -136,7 +134,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
       edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
       return;
     }
-
+*/
     // Now you can process the retrieved data
     uint32_t nClusters = 0;
     for (const auto& detSet : *clustersHandle) {
@@ -151,11 +149,11 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     }
     std::cout << "Number of digis: " << nDigis << std::endl;
 
-
+/*
     // Process the hits
     const auto& hits = *recHitsHandle;
     std::cout << "Number of hits: " << hits.nHits() << std::endl;
-
+*/
     // Use event ID as the offset
     int32_t eventOffset = iEvent.id().event();
 
