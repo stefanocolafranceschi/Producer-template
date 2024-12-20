@@ -2,6 +2,7 @@
   <class name="SiPixelClustersSoA"/>
   <class name="SiPixelClustersSoA::View"/>
   <class name="PortableHostCollection<SiPixelClustersSoA>"/>
+
   <class name="SiPixelDigisSoA"/>
   <class name="edmNew::DetSetVector<SiPixelDigisSoA>"/>
   <class name="edm::Wrapper<edmNew::DetSetVector<SiPixelDigisSoA>>"/>
