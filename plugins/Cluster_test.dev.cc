@@ -1,4 +1,5 @@
 #include <type_traits>
+
 #include <alpaka/alpaka.hpp>
 
 #include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsDevice.h"
@@ -22,44 +23,82 @@ using namespace alpaka;
 namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
   using namespace cms::alpakatools;
+  namespace Splitting {
 
-  namespace testSiPixelClustersSoA {
-
-    struct ShowKernel {
-        template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
-        ALPAKA_FN_ACC void operator()(TAcc const& acc, SiPixelClustersSoAConstView soa) const {
-            if (cms::alpakatools::once_per_grid(acc)) {
-                printf("well this works!\n");
-            }
-/*
-            printf("Inspecting available members:\n");
-            printf("moduleStart[0]: %u\n", soa.moduleStart(0));
-            printf("clusInModule[0]: %u\n", soa.clusInModule(0));
-            printf("moduleId[0]: %u\n", soa.moduleId(0));
-            printf("clusModuleStart[0]: %u\n", soa.clusModuleStart(0));
-*/
-for (size_t i = 0; i < 5; ++i) {
-
-            printf("moduleStart[i]: %u\n", soa.moduleStart(i));
-            printf("clusInModule[i]: %u\n", soa.clusInModule(i));
-            printf("moduleId[i]: %u\n", soa.moduleId(i));
-            printf("clusModuleStart[i]: %u\n", soa.clusModuleStart(i));
-
-}
-
+    template <typename TrackerTraits>
+    struct Printout {
+      template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
+      ALPAKA_FN_ACC void operator()(TAcc const& acc, 
+                                    TrackingRecHitSoAConstView<TrackerTraits> hitView, 
+                                    SiPixelDigisSoAConstView digiView,
+                                    SiPixelClustersSoAConstView clustersView) const {
+        
+        // Output information from TrackingRecHitSoAConstView
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("TrackingRecHits Info:\n");
+          printf("nbins = %d\n", hitView.phiBinner().nbins());
+          printf("offsetBPIX = %d\n", hitView.offsetBPIX2());
+          printf("nHits = %d\n", hitView.metadata().size());
         }
+
+        // Print debug info for hits
+        for (uint32_t i : cms::alpakatools::uniform_elements(acc, 10)) {
+          printf("Hit iPhi %d -> %d\n", i, hitView[i].iphi());
+        }
+
+        // Output information from SiPixelDigisSoAConstView
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("SiPixelDigis Info:\n");
+          printf("nDigis = %d\n", digiView.metadata().size());
+        }
+
+        // Print debug info for digis
+        for (uint32_t j : cms::alpakatools::uniform_elements(acc, 10)) {
+          printf("Digi Module %d -> ADC %d\n", j, digiView[j].adc());
+        }
+
+        // Output information from SiPixelClustersSoAConstView
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("SiPixelClusters Info:\n");
+          printf("nClusters = %d\n", clustersView.metadata().size());
+        }
+
+        // Print debug info for clusters
+        for (uint32_t k : cms::alpakatools::uniform_elements(acc, 10)) {
+          //printf("Cluster %d -> Size %d\n", k, clustersView[k].size());
+        }
+      }
     };
 
-    // Reintroduce template specialization
-    void runKernels(SiPixelClustersSoAView& clusters, Queue& queue) {
+
+
+
+    template <typename TrackerTraits>
+    void runKernels(TrackingRecHitSoAView<TrackerTraits>& hitView,
+                    SiPixelDigisSoAView& digiView,
+                    SiPixelClustersSoAView& clustersView,
+                    Queue& queue) {
         uint32_t items = 64;
-        uint32_t groups = divide_up_by(2, items);  // Use actual cluster count
+        uint32_t groupsHits = divide_up_by(hitView.metadata().size(), items);
+        uint32_t groupsDigis = divide_up_by(digiView.metadata().size(), items);
+        uint32_t groupsClusters = divide_up_by(clustersView.metadata().size(), items);
+        
+        uint32_t groups = std::max({groupsHits, groupsDigis, groupsClusters});  // Ensure work division covers all three views
+
         auto workDiv = make_workdiv<Acc1D>(groups, items);
 
-        // Launch kernels
-        alpaka::exec<Acc1D>(queue, workDiv, ShowKernel{}, clusters);
+        // Kernel execution for hits, digis, and clusters
+        alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView);
     }
 
-  }  // namespace testSiPixelClustersSoA
+    template void runKernels<pixelTopology::Phase1>(TrackingRecHitSoAView<pixelTopology::Phase1>& hitView,
+                                                    SiPixelDigisSoAView& digiView,
+                                                    SiPixelClustersSoAView& clustersView,
+                                                    Queue& queue);
 
+    template void runKernels<pixelTopology::Phase2>(TrackingRecHitSoAView<pixelTopology::Phase2>& hitView,
+                                                    SiPixelDigisSoAView& digiView,
+                                                    SiPixelClustersSoAView& clustersView,
+                                                    Queue& queue);
+  }  // namespace Splitting
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE

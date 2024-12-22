@@ -16,7 +16,6 @@
 #include "TFile.h"
 #include "TString.h"
 
-
 #include <cstdlib>
 #include <unistd.h>
 
@@ -67,8 +66,9 @@ private:
   TFile* rootFile_;
   std::vector<Device> devices_;
 
-  edm::EDGetTokenT<edmNew::DetSetVector<SiPixelCluster>> clusterToken_;
-  edm::EDGetTokenT<edmNew::DetSetVector<SiPixelDigisSoA>> digisToken_;
+  edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
+  edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
+  edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
 };
 
 
@@ -77,8 +77,9 @@ trial::trial(const edm::ParameterSet& iConfig)
       nHits_(iConfig.getParameter<uint32_t>("nHits")),
       offset_(iConfig.getParameter<int32_t>("offset")),
       rootFile_(nullptr),
-      clusterToken_(consumes<edmNew::DetSetVector<SiPixelCluster>>(edm::InputTag("siPixelClusters"))),  // Close this parentheses
-      digisToken_(consumes<edmNew::DetSetVector<SiPixelDigisSoA>>(edm::InputTag("SiPixelDigisSoA"))) // Close this parentheses
+      clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
+      digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
+      recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA")))
 {
     // Initialize ROOT file
     rootFile_ = new TFile("config_output.root", "RECREATE");
@@ -111,83 +112,104 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         return;
     }
 
-    // Extract data from the event using edmNew
-    edm::Handle<edmNew::DetSetVector<SiPixelCluster>> clustersHandle;
+    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clustersHandle;
     iEvent.getByToken(clusterToken_, clustersHandle);
     if (!clustersHandle.isValid()) {
         edm::LogError("trial") << "Could not retrieve SiPixelClusters.";
         return;
     }
 
-    edm::Handle<edmNew::DetSetVector<SiPixelDigisSoA>> digisHandle;
+    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisHandle;
     iEvent.getByToken(digisToken_, digisHandle);
     if (!digisHandle.isValid()) {
         edm::LogError("trial") << "Could not retrieve SiPixelDigisSoA.";
         return;
     }
-/*
-    // Handle to access TrackingRecHitsSoACollection (Phase 1)
-    edm::Handle<TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsHandle;
-    iEvent.getByToken(recHitsToken_, recHitsHandle);
-    // Check if the handle is valid
-    if (!recHitsHandle.isValid()) {
-      edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
-      return;
-    }
-*/
-    // Now you can process the retrieved data
-    uint32_t nClusters = 0;
-    for (const auto& detSet : *clustersHandle) {
-        nClusters += detSet.size();
-    }
-    std::cout << "Total clusters in this event: " << nClusters << std::endl;
 
-    // Iterate over the DetSetVector to get the number of digis
-    size_t nDigis = 0;
-    for (const auto& detSet : *digisHandle) {
-        nDigis += detSet.size();
-    }
+    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsHandle;
+    iEvent.getByToken(recHitsToken_, recHitsHandle);
+    if (!recHitsHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
+        return;
+    }        
+
+
+    // Process SiPixelDigisSoACollection
+    const auto& digis = *digisHandle;
+    size_t nDigis = digis.nDigis();
     std::cout << "Number of digis: " << nDigis << std::endl;
 
-/*
-    // Process the hits
-    const auto& hits = *recHitsHandle;
-    std::cout << "Number of hits: " << hits.nHits() << std::endl;
-*/
+    // Process TrackingRecHitsSoACollection
+    const auto& recHits = *recHitsHandle;
+    size_t nHits = recHits.nHits();
+    std::cout << "Number of hits: " << recHits.nHits() << std::endl;
+
     // Use event ID as the offset
     int32_t eventOffset = iEvent.id().event();
+    std::cout << "Event offset: " << eventOffset << std::endl;
+
+    // Process SiPixelClustersSoACollection
+    const auto& clusters = *clustersHandle;
+    uint32_t nClusters = clusters.nClusters();
+    std::cout << "Total clusters in this event: " << nClusters << std::endl;
 
     for (const auto& device : devices_) {
-      Queue queue(device);
+        Queue queue(device);
 
-      // Define moduleStart data
-      auto moduleStartH =
-          cms::alpakatools::make_host_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
-      for (size_t i = 0; i < pixelTopology::Phase1::numberOfModules + 1; ++i) {
-        moduleStartH[i] = i * 2;
-      }
-      auto moduleStartD =
-          cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
-      alpaka::memcpy(queue, moduleStartD, moduleStartH);
+        // Define moduleStart data
+        auto moduleStartH =
+            cms::alpakatools::make_host_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
+        for (size_t i = 0; i < pixelTopology::Phase1::numberOfModules + 1; ++i) {
+          moduleStartH[i] = i * 2;
+        }
+        auto moduleStartD =
+            cms::alpakatools::make_device_buffer<uint32_t[]>(queue, pixelTopology::Phase1::numberOfModules + 1);
+        alpaka::memcpy(queue, moduleStartD, moduleStartH);
+        alpaka::wait(queue);            // Ensure the data copy is complete
 
-      // Create device buffers for SiPixelClustersSoA
-      SiPixelClustersDevice<Device> clustersSoA(nClusters, queue);
 
-      // Debugging output
-      std::cout << "Type of clustersSoA: " << typeid(clustersSoA).name() << std::endl;
-      std::cout << "Type of clustersSoA.view(): " << typeid(clustersSoA.view()).name() << std::endl;
 
-      // Run the kernel on the clusters
-      testSiPixelClustersSoA::runKernels(clustersSoA.view(), queue);
+        /* Processing RecHits (Create device buffers) -----------------------------
+           the TrackingRecHitsSoACollection is an alias for: TrackingRecHitDevice (gpu) 
+                                                            TrackingRecHitHost (cpu)  */
+        TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits, eventOffset, moduleStartD.data());
+        //-------------------------------------------------------------
 
-      // Update data back from device to host (if needed)
-      //clustersSoA.updateFromDevice(queue);
 
-      // Wait for kernel completion
-      alpaka::wait(queue);
 
-      // Verify results (optional)
-      // assert(clustersSoA.nClusters() == nClusters);
+        /* Processing Digis (Create device buffers) -----------------------------
+        the SiPixelDigisSoACollection is an alias for: SiPixelDigisDevice (gpu) or 
+                                                          SiPixelDigisHost (cpu)
+        but it's not templated so <pixelTopology> won't work
+        you could also: SiPixelDigisDevice<Device> digisDevice(nDigis, queue); */
+        SiPixelDigisSoACollection tkdigi(nDigis, queue);
+        tkdigi.setNModules(pixelTopology::Phase1::numberOfModules);         // Set additional metadata
+        //-------------------------------------------------------------
+
+
+
+
+        /* Processing Clusters (Create device buffers)-----------------------------
+           the SiPixelClustersSoACollection is an alias for: SiPixelClustersDevice (gpu) 
+                                                            SiPixelClustersHost (cpu)  */
+        SiPixelClustersSoACollection tkclusters(nClusters, queue);
+        // It seems the above class has no topology and no Modules.. not sure why
+        //-------------------------------------------------------------
+
+
+
+        // Run the kernel with both hits and digis
+        Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), queue);
+
+
+
+        // Update from device to host (RecHits and Digis)
+        tkhit.updateFromDevice(queue);
+        TrackingRecHitHost<pixelTopology::Phase1> hostRecHits = cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkhit);
+        SiPixelDigisHost digisHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tkdigi);
+        SiPixelClustersHost clustersHost = cms::alpakatools::CopyToHost<SiPixelClustersDevice<Device>>::copyAsync(queue, tkclusters);
+
+        alpaka::wait(queue);
     }
 }
 

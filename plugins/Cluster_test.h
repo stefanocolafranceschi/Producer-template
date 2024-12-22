@@ -7,11 +7,15 @@
 
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 
-namespace ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClustersSoA {
+namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
 
-  // Corrected function declaration
-  void runKernels(SiPixelClustersSoAView& clusters, Queue& queue);
+  template <typename TrackerTraits>
+  void runKernels(TrackingRecHitSoAView<TrackerTraits>& hits,
+                  SiPixelDigisSoAView& digis,
+                  SiPixelClustersSoAView& clusters,
+                  Queue& queue);
 
-}  // namespace ALPAKA_ACCELERATOR_NAMESPACE::testSiPixelClusterSoA
+}  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting
+
 
 #endif  // DataFormats_SiPixelClusterSoA_test_alpaka_Hits_test_h
