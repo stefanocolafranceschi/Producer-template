@@ -33,44 +33,87 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                     SiPixelDigisSoAConstView digiView,
                                     SiPixelClustersSoAConstView clustersView) const {
         
-        // Output information from TrackingRecHitSoAConstView
+
+        // Print debug info for RecHits -----------------------------------
         if (cms::alpakatools::once_per_grid(acc)) {
           printf("TrackingRecHits Info:\n");
           printf("nbins = %d\n", hitView.phiBinner().nbins());
           printf("offsetBPIX = %d\n", hitView.offsetBPIX2());
           printf("nHits = %d\n", hitView.metadata().size());
         }
-
-        // Print debug info for hits
         for (uint32_t i : cms::alpakatools::uniform_elements(acc, 10)) {
-          printf("Hit iPhi %d -> %d\n", i, hitView[i].iphi());
+          printf("Hit %d -> xLocal: %.2f, yLocal: %.2f, xerrLocal: %.2f, yerrLocal: %.2f, "
+                 "xGlobal: %.2f, yGlobal: %.2f, zGlobal: %.2f, rGlobal: %.2f, iPhi: %d, "
+                 "charge: %d, isBigX: %d, isOneX: %d, isBigY: %d, isOneY: %d, qBin: %d, "
+                 "clusterSizeX: %d, clusterSizeY: %d, detectorIndex: %d\n",
+                 i,
+                 hitView[i].xLocal(),
+                 hitView[i].yLocal(),
+                 hitView[i].xerrLocal(),
+                 hitView[i].yerrLocal(),
+                 hitView[i].xGlobal(),
+                 hitView[i].yGlobal(),
+                 hitView[i].zGlobal(),
+                 hitView[i].rGlobal(),
+                 hitView[i].iphi(),
+                 hitView[i].chargeAndStatus().charge,
+                 hitView[i].chargeAndStatus().status.isBigX,
+                 hitView[i].chargeAndStatus().status.isOneX,
+                 hitView[i].chargeAndStatus().status.isBigY,
+                 hitView[i].chargeAndStatus().status.isOneY,
+                 hitView[i].chargeAndStatus().status.qBin,
+                 hitView[i].clusterSizeX(),
+                 hitView[i].clusterSizeY(),
+                 hitView[i].detectorIndex());
         }
 
-        // Output information from SiPixelDigisSoAConstView
+
+
+
+        // Print debug info for digis -----------------------------------
         if (cms::alpakatools::once_per_grid(acc)) {
           printf("SiPixelDigis Info:\n");
           printf("nDigis = %d\n", digiView.metadata().size());
         }
-
-        // Print debug info for digis
         for (uint32_t j : cms::alpakatools::uniform_elements(acc, 10)) {
-          printf("Digi Module %d -> ADC %d\n", j, digiView[j].adc());
+          uint16_t x = digiView[j].xx();
+          uint16_t y = digiView[j].yy();
+          uint16_t adc = digiView[j].adc();
+          printf("Digi %d -> x: %d, y: %d, ADC: %d\n", j, x, y, adc);
         }
 
-        // Output information from SiPixelClustersSoAConstView
+
+
+        // Print debug info for Clusters -----------------------------------
         if (cms::alpakatools::once_per_grid(acc)) {
           printf("SiPixelClusters Info:\n");
           printf("nClusters = %d\n", clustersView.metadata().size());
         }
-
-        // Print debug info for clusters
         for (uint32_t k : cms::alpakatools::uniform_elements(acc, 10)) {
-          //printf("Cluster %d -> Size %d\n", k, clustersView[k].size());
+            printf("Cluster %d -> moduleStart: %d, clusInModule: %d, moduleId: %d, clusModuleStart: %d\n",
+                   k,
+                   clustersView[k].moduleStart(),
+                   clustersView[k].clusInModule(),
+                   clustersView[k].moduleId(),
+                   clustersView[k].clusModuleStart());
         }
       }
     };
 
 
+    template <typename TrackerTraits>
+    struct JetSplit {
+      template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
+      ALPAKA_FN_ACC void operator()(TAcc const& acc, 
+                                    TrackingRecHitSoAConstView<TrackerTraits> hitView, 
+                                    SiPixelDigisSoAConstView digiView,
+                                    SiPixelClustersSoAConstView clustersView) const {
+        
+
+        // to be understood how to do it
+
+      }
+    };
 
 
     template <typename TrackerTraits>
