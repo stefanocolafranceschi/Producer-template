@@ -141,7 +141,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
         return;
     }        
-/*
+
   // Retrieve Candidate Collection
   edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
   iEvent.getByToken(candidateToken_, candidatesHandle);
@@ -150,8 +150,8 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     return;
   }
 
-std::vector<CandidateGPUData> gpuCandidates;
-gpuCandidates.reserve(candidatesHandle->size());
+  std::vector<CandidateGPUData> gpuCandidates;
+  gpuCandidates.reserve(candidatesHandle->size());
 
 
 for (const auto& candidate : *candidatesHandle) {
@@ -171,7 +171,7 @@ for (const auto& candidate : *candidatesHandle) {
 
 
 auto const& candidates = *candidatesHandle;
-*/
+
     // Process TrackingRecHitsSoACollection
     const auto& recHits = *recHitsHandle;
     size_t nHits = recHits.nHits();
@@ -242,22 +242,24 @@ auto const& candidates = *candidatesHandle;
         // Run the kernel with both hits, digis, clusters
         //Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), *candidatesHandle, queue);
 
-/*
+
 // Allocate and transfer CandidateGPUData to the GPU
+/*
 auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+
+//the following like does NOT WORK!
 alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidates.data(), gpuCandidates.size());
+
 alpaka::wait(queue); // Ensure data is transferred
+*/
 
 
-
+/*
 // Run the kernel with GPU candidates
 Splitting::runKernels<pixelTopology::Phase1>(
     tkhit.view(), tkdigi.view(), tkclusters.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), queue
 );
 */
-
-
-
 
         // Update from device to host (RecHits and Digis)
         tkhit.updateFromDevice(queue);
