@@ -239,19 +239,20 @@ auto const& candidates = *candidatesHandle;
         alpaka::memcpy(queue, tkclusters.buffer(), clustersHandle->buffer());
 
 
+// Create Alpaka host buffer
+auto gpuCandidatesHost = cms::alpakatools::make_host_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+
+// Copy data from std::vector to Alpaka host buffer
+std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());
+
+// Transfer data from host to device
+alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);
+alpaka::wait(queue);  // Ensure the transfer is complete
+
+
+
         // Run the kernel with both hits, digis, clusters
         //Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), *candidatesHandle, queue);
-
-
-// Allocate and transfer CandidateGPUData to the GPU
-/*
-auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
-
-//the following like does NOT WORK!
-alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidates.data(), gpuCandidates.size());
-
-alpaka::wait(queue); // Ensure data is transferred
-*/
 
 
 /*
