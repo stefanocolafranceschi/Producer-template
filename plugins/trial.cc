@@ -21,6 +21,12 @@
 
 #include <alpaka/alpaka.hpp>
 
+
+#include "DataFormats/PatCandidates/interface/Jet.h"
+#include "DataFormats/PatCandidates/interface/PackedCandidate.h"
+#include "DataFormats/Candidate/interface/Candidate.h"
+#include "DataFormats/Candidate/interface/VertexCompositePtrCandidate.h"
+
 #include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsDevice.h"
 #include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsHost.h"
 #include "DataFormats/TrackingRecHitSoA/interface/alpaka/TrackingRecHitsSoACollection.h"
@@ -69,6 +75,7 @@ private:
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
+  edm::EDGetTokenT<edm::View<reco::Candidate>> candidateToken_;
 };
 
 
@@ -79,7 +86,8 @@ trial::trial(const edm::ParameterSet& iConfig)
       rootFile_(nullptr),
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
-      recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA")))
+      recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
+      candidateToken_(consumes<edm::View<reco::Candidate>>(edm::InputTag("candidateInput")))
 {
     // Initialize ROOT file
     rootFile_ = new TFile("config_output.root", "RECREATE");
@@ -105,6 +113,7 @@ void trial::beginStream(edm::StreamID) {
   }
   edm::LogInfo("trial") << "Found " << devices_.size() << " device(s).";
 }
+
 
 void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     if (devices_.empty()) {
@@ -132,8 +141,37 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
         return;
     }        
+/*
+  // Retrieve Candidate Collection
+  edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
+  iEvent.getByToken(candidateToken_, candidatesHandle);
+  if (!candidatesHandle.isValid()) {
+    edm::LogError("MyModule") << "Could not retrieve Candidate collection.";
+    return;
+  }
+
+std::vector<CandidateGPUData> gpuCandidates;
+gpuCandidates.reserve(candidatesHandle->size());
 
 
+for (const auto& candidate : *candidatesHandle) {
+    if (candidate.pt() > 1.0) { // Adjust ptMin_ condition as needed
+        CandidateGPUData data = {
+            static_cast<float>(candidate.px()),  // Cast to float
+            static_cast<float>(candidate.py()),  // Cast to float
+            static_cast<float>(candidate.pz()),  // Cast to float
+            static_cast<float>(candidate.pt()),  // Cast to float
+            static_cast<float>(candidate.eta()), // Cast to float
+            static_cast<float>(candidate.phi())  // Cast to float
+        };
+        gpuCandidates.push_back(data);
+    }
+}
+
+
+
+auto const& candidates = *candidatesHandle;
+*/
     // Process TrackingRecHitsSoACollection
     const auto& recHits = *recHitsHandle;
     size_t nHits = recHits.nHits();
@@ -202,7 +240,23 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
 
         // Run the kernel with both hits, digis, clusters
-        Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), queue);
+        //Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), *candidatesHandle, queue);
+
+/*
+// Allocate and transfer CandidateGPUData to the GPU
+auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidates.data(), gpuCandidates.size());
+alpaka::wait(queue); // Ensure data is transferred
+
+
+
+// Run the kernel with GPU candidates
+Splitting::runKernels<pixelTopology::Phase1>(
+    tkhit.view(), tkdigi.view(), tkclusters.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), queue
+);
+*/
+
+
 
 
         // Update from device to host (RecHits and Digis)

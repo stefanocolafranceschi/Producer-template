@@ -4,5 +4,6 @@
 <use name="FWCore/PluginManager"/>
 <use name="alpaka"/>
 <use name="HeterogeneousCore/AlpakaInterface"/>
+<use name="CLHEP"/>
 <flags EDM_PLUGIN="1"/>
 <flags ALPAKA_BACKENDS="1"/>
