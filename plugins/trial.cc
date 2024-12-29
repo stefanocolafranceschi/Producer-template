@@ -43,8 +43,14 @@
 #include "DataFormats/Common/interface/DetSetVector.h"
 #include "DataFormats/SiPixelCluster/interface/SiPixelCluster.h"
 
+#include "DataFormats/VertexSoA/interface/ZVertexSoA.h"
+#include "DataFormats/VertexSoA/interface/ZVertexHost.h"
+#include "DataFormats/VertexSoA/interface/ZVertexDevice.h"
+#include "DataFormats/VertexSoA/interface/alpaka/ZVertexSoACollection.h"
+
 #include "FWCore/Utilities/interface/stringize.h"
 #include "Geometry/CommonTopologies/interface/SimplePixelTopology.h"
+
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/devices.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/memory.h"
@@ -76,6 +82,9 @@ private:
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
   edm::EDGetTokenT<edm::View<reco::Candidate>> candidateToken_;
+  edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection> zVertexToken_;
+
+  const double ptMin_;
 };
 
 
@@ -87,14 +96,16 @@ trial::trial(const edm::ParameterSet& iConfig)
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
       recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
-      candidateToken_(consumes<edm::View<reco::Candidate>>(edm::InputTag("candidateInput")))
-{
-    // Initialize ROOT file
-    rootFile_ = new TFile("config_output.root", "RECREATE");
+      candidateToken_(consumes<edm::View<reco::Candidate>>(edm::InputTag("candidateInput"))),
+      zVertexToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection>(edm::InputTag("ZVertex"))),
+      ptMin_(iConfig.getParameter<double>("ptMin"))
+        {
+            // Initialize ROOT file
+            rootFile_ = new TFile("config_output.root", "RECREATE");
 
-    // Register the product that this module will produce
-    produces<std::vector<int>>("outputHits");
-}
+            // Register the product that this module will produce
+            produces<std::vector<int>>("outputHits");
+        }
 
 
 trial::~trial() {
@@ -142,36 +153,41 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         return;
     }        
 
-  // Retrieve Candidate Collection
-  edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
-  iEvent.getByToken(candidateToken_, candidatesHandle);
-  if (!candidatesHandle.isValid()) {
-    edm::LogError("MyModule") << "Could not retrieve Candidate collection.";
-    return;
-  }
-
-  std::vector<CandidateGPUData> gpuCandidates;
-  gpuCandidates.reserve(candidatesHandle->size());
-
-
-for (const auto& candidate : *candidatesHandle) {
-    if (candidate.pt() > 1.0) { // Adjust ptMin_ condition as needed
-        CandidateGPUData data = {
-            static_cast<float>(candidate.px()),  // Cast to float
-            static_cast<float>(candidate.py()),  // Cast to float
-            static_cast<float>(candidate.pz()),  // Cast to float
-            static_cast<float>(candidate.pt()),  // Cast to float
-            static_cast<float>(candidate.eta()), // Cast to float
-            static_cast<float>(candidate.phi())  // Cast to float
-        };
-        gpuCandidates.push_back(data);
+    edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
+    iEvent.getByToken(candidateToken_, candidatesHandle);
+    if (!candidatesHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve Candidate collection.";
+        return;
     }
-}
+
+    std::vector<CandidateGPUData> gpuCandidates;
+    gpuCandidates.reserve(candidatesHandle->size());
 
 
+    // Iterate over the candidates in the collection, filter them based on a minimum transverse momentum (ptMin_),
+    // and prepare their data in a GPU-compatible format (CandidateGPUData) for further processing on the device.    
+    for (const auto& candidate : *candidatesHandle) {
+        if (candidate.pt() > ptMin_) {
+            CandidateGPUData data = {
+                static_cast<float>(candidate.px()),  // Cast to float
+                static_cast<float>(candidate.py()),  // Cast to float
+                static_cast<float>(candidate.pz()),  // Cast to float
+                static_cast<float>(candidate.pt()),  // Cast to float
+                static_cast<float>(candidate.eta()), // Cast to float
+                static_cast<float>(candidate.phi())  // Cast to float
+            };
+            gpuCandidates.push_back(data);
+        }
+    }
+    auto const& candidates = *candidatesHandle;
 
-auto const& candidates = *candidatesHandle;
-
+    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection> zVertexHandle;
+    iEvent.getByToken(zVertexToken_, zVertexHandle);
+    if (!zVertexHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve zVertexHandle";
+        return;
+    }
+    
     // Process TrackingRecHitsSoACollection
     const auto& recHits = *recHitsHandle;
     size_t nHits = recHits.nHits();
@@ -186,6 +202,12 @@ auto const& candidates = *candidatesHandle;
     const auto& clusters = *clustersHandle;
     uint32_t nClusters = clusters.nClusters();
     std::cout << "Total clusters in this event: " << nClusters << std::endl;
+
+    // Process ZVertexSoACollection
+    const auto& zVertices = *zVertexHandle;
+    uint32_t nVertices = zVertices.view().nvFinal();
+    std::cout << "Number of Vertices: " << nVertices << std::endl;
+
 
     // Use event ID as the offset
     int32_t eventOffset = iEvent.id().event();
@@ -229,6 +251,16 @@ auto const& candidates = *candidatesHandle;
                                                             SiPixelClustersHost (cpu)  */
         SiPixelClustersSoACollection tkclusters(nClusters, queue);
         // It seems the above class has no topology and no Modules.. not sure why
+
+
+        /* Candidates
+           I create Alpaka host buffer and device buffer (for GPU)*/
+        auto gpuCandidatesHost = cms::alpakatools::make_host_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+        auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+
+
+        ZVertexSoACollection tkvertices(queue);
+
         //- - - - - - - - - - - - - - - - - - -
 
 
@@ -237,30 +269,17 @@ auto const& candidates = *candidatesHandle;
         alpaka::memcpy(queue, tkhit.buffer(), recHitsHandle->buffer());
         alpaka::memcpy(queue, tkdigi.buffer(), digisHandle->buffer());
         alpaka::memcpy(queue, tkclusters.buffer(), clustersHandle->buffer());
+        alpaka::memcpy(queue, tkvertices.buffer(), zVertexHandle->buffer());  // Transfer ZVertex data from host to device
+        std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());  // Copy data from std::vector to Alpaka host buffer
+        alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);          // Transfer data from host to device
+        alpaka::wait(queue);  // Ensure the transfer is complete
 
 
-// Create Alpaka host buffer
-auto gpuCandidatesHost = cms::alpakatools::make_host_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+        // Run the kernel with GPU candidates
+        Splitting::runKernels<pixelTopology::Phase1>(
+            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), queue
+        );
 
-// Copy data from std::vector to Alpaka host buffer
-std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());
-
-// Transfer data from host to device
-alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);
-alpaka::wait(queue);  // Ensure the transfer is complete
-
-
-
-        // Run the kernel with both hits, digis, clusters
-        //Splitting::runKernels<pixelTopology::Phase1>(tkhit.view(), tkdigi.view(), tkclusters.view(), *candidatesHandle, queue);
-
-
-/*
-// Run the kernel with GPU candidates
-Splitting::runKernels<pixelTopology::Phase1>(
-    tkhit.view(), tkdigi.view(), tkclusters.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), queue
-);
-*/
 
         // Update from device to host (RecHits and Digis)
         tkhit.updateFromDevice(queue);

@@ -26,9 +26,15 @@
 #include "DataFormats/TrackerCommon/interface/TrackerTopology.h"
 #include "DataFormats/JetReco/interface/Jet.h"
 
+#include "DataFormats/VertexSoA/interface/ZVertexSoA.h"
+#include "DataFormats/VertexSoA/interface/ZVertexHost.h"
+#include "DataFormats/VertexSoA/interface/ZVertexDevice.h"
+#include "DataFormats/VertexSoA/interface/alpaka/ZVertexSoACollection.h"
+
 #include "Cluster_test.h"
 
 using namespace alpaka;
+using namespace reco;
 
 namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
@@ -38,10 +44,11 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
     template <typename TrackerTraits>
     struct Printout {
       template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
-  ALPAKA_FN_ACC void operator()(TAcc const& acc, 
+        ALPAKA_FN_ACC void operator()(TAcc const& acc, 
                                 TrackingRecHitSoAConstView<TrackerTraits> hitView, 
                                 SiPixelDigisSoAConstView digiView,
                                 SiPixelClustersSoAConstView clustersView,
+                                ZVertexSoAView vertexView,
                                 const CandidateGPUData* candidates,  // Updated to CandidateGPUData
                                 size_t nCandidates) const {         // Added number of candidates
  
@@ -140,181 +147,198 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                        clusterIdx, numPixels, totalADC, minX, maxX, minY, maxY);
             }
         }
+
+
+        // Print debug info for Candidates -----------------------------------
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("Candidate Info:\n");
+          printf("nCandidates = %zu\n", nCandidates);
+        }
+        for (uint32_t c : cms::alpakatools::uniform_elements(acc, 10)) {
+          if (c < nCandidates) {  // Ensure index is within bounds
+            printf("Candidate %d -> px: %.2f, py: %.2f, pz: %.2f, pt: %.2f, eta: %.2f, phi: %.2f\n",
+                   c,
+                   candidates[c].px,
+                   candidates[c].py,
+                   candidates[c].pz,
+                   candidates[c].pt,
+                   candidates[c].eta,
+                   candidates[c].phi);
+          }
+        }
+
+
+
+        // Print debug info for Vertices -----------------------------------
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("Vertex Info:\n");
+          printf("nVertices = %d\n", vertexView.metadata().size());
+        }
+        for (uint32_t v : cms::alpakatools::uniform_elements(acc, 10)) {
+          printf("Vertex %d -> z: %.2f, w: %.2f, chi2: %.2f, pt^2: %.2f, sortedIndex: %d\n",
+                 v,
+                 vertexView[v].zv(),
+                 vertexView[v].wv(),
+                 vertexView[v].chi2(),
+                 vertexView[v].ptv2(),
+                 vertexView[v].sortInd());
+        }
+
+
       }
     };
+
+
 
 
 /*
 template <typename TrackerTraits>
 struct JetSplit {
-  // Define ClusterProperties to store cluster-related information
-  struct ClusterProperties {
-    uint32_t minX = std::numeric_limits<uint32_t>::max();
-    uint32_t minY = std::numeric_limits<uint32_t>::max();
-    uint32_t maxX = 0;
-    uint32_t maxY = 0;
-    uint32_t charge = 0;
+    // Cluster properties structure remains unchanged
+    struct ClusterProperties {
+        uint32_t minX = std::numeric_limits<uint32_t>::max();
+        uint32_t minY = std::numeric_limits<uint32_t>::max();
+        uint32_t maxX = 0;
+        uint32_t maxY = 0;
+        uint32_t charge = 0;
 
-    uint32_t sizeX() const { return maxX - minX + 1; }
-    uint32_t sizeY() const { return maxY - minY + 1; }
-  };
+        uint32_t sizeX() const { return maxX - minX + 1; }
+        uint32_t sizeY() const { return maxY - minY + 1; }
+    };
 
-  // Main operator function
-  template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
-  ALPAKA_FN_ACC void operator()(TAcc const& acc,
-                                TrackingRecHitSoAConstView<TrackerTraits> hitView,
-                                SiPixelDigisSoAConstView digiView,
-                                SiPixelClustersSoAConstView clustersView,
-                                const std::vector<reco::Candidate>& cores, // Jet collection
-                                const GlobalPoint& ppv, // Primary vertex position
-                                const edm::ESHandle<GeometricSearchTracker>& det,
-                                float ptMin_, float deltaR_) const {
+    // Main operator function
+    template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
+    ALPAKA_FN_ACC void operator()(TAcc const& acc,
+                                  TrackingRecHitSoAConstView<TrackerTraits> hitView,
+                                  SiPixelDigisSoAConstView digiView,
+                                  SiPixelClustersSoAConstView clustersView,
+                                  const std::vector<reco::Candidate>& cores,
+                                  const GlobalPoint& ppv,
+                                  const edm::ESHandle<GeometricSearchTracker>& det,
+                                  float ptMin_, float deltaR_) const {
 
-      // Iterate over clusters
-      for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clustersView.metadata().size())) {
-        // Compute properties of the cluster from digis
-        auto clusterProps = computeClusterProperties(acc, digiView, clusterIdx);
+        for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clustersView.metadata().size())) {
+            auto clusterProps = computeClusterProperties(acc, digiView, clusterIdx);
+            GlobalPoint cPos = getClusterPosition(clusterIdx, digiView, det); // Needs implementation
 
-        // Placeholder: Get cluster position (this might come from the cluster data)
-        GlobalPoint cPos = getClusterPosition(clusterIdx, digiView);  // Assume this is defined
+            GlobalVector clusterDir = cPos - ppv;
 
-        // Compute the cluster direction (vector from cluster to ppv)
-        GlobalVector clusterDir = cPos - ppv;
+            for (const auto& jet : cores) {
+                GlobalVector jetDir(jet.px(), jet.py(), jet.pz());
 
-        // Iterate over jets (cores) to check deltaR with the cluster
+                if (Geom::deltaR(jetDir, clusterDir) < deltaR_ && shouldSplit(clusterProps, jetDir)) {
+                    auto subClusters = splitCluster(acc, clusterProps, jetDir, digiView, clusterIdx, det);
 
-
-        for (unsigned int ji = 0; ji < cores.size(); ji++) {
-          if (ji < cores.size()) {
-            const reco::Candidate& jet = cores.at(ji);
-            GlobalVector jetDir(static_cast<double>(jet.px()), 
-                                static_cast<double>(jet.py()), 
-                                static_cast<double>(jet.pz()));
-
-            // Calculate deltaR between jet and cluster
-            if (Geom::deltaR(jetDir, clusterDir) < deltaR_) {
-              // If deltaR condition met, check if the cluster should be split
-              if (shouldSplit(clusterProps, jetDir)) {
-                // Split the cluster into sub-clusters
-                auto subClusters = splitCluster(acc, clusterProps, jetDir, digiView, clusterIdx, det);
-
-                // Debug output for sub-clusters
-                for (const auto& subCluster : subClusters) {
-                  printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
-                         subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
+                    for (const auto& subCluster : subClusters) {
+                        printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
+                               subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
+                    }
                 }
-              }
             }
-          }
         }
-      }
-
-  // Function to compute cluster properties
-  template <typename TAcc>
-  ALPAKA_FN_ACC ClusterProperties computeClusterProperties(
-      TAcc const& acc,
-      const SiPixelDigisSoAConstView& digiView,
-      uint32_t clusterIdx) const {
-    ClusterProperties props;
-
-    for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
-      if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
-        uint16_t x = digiView[j].xx();
-        uint16_t y = digiView[j].yy();
-        uint16_t adc = digiView[j].adc();
-
-        props.minX = std::min(props.minX, static_cast<uint32_t>(x));
-        props.minY = std::min(props.minY, static_cast<uint32_t>(y));
-        props.maxX = std::max(props.maxX, static_cast<uint32_t>(x));
-        props.maxY = std::max(props.maxY, static_cast<uint32_t>(y));
-        props.charge += adc;
-      }
     }
-    return props;
-  }
 
-  // Function to decide whether a cluster should be split
-  ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, const GlobalVector& jetDir) const {
-    // Placeholder logic: split if charge or size exceeds threshold
-    return cluster.charge > 500 && (cluster.sizeX() > 2 || cluster.sizeY() > 2);
-  }
+    // Computes cluster properties
+    template <typename TAcc>
+    ALPAKA_FN_ACC ClusterProperties computeClusterProperties(TAcc const& acc,
+                                                             const SiPixelDigisSoAConstView& digiView,
+                                                             uint32_t clusterIdx) const {
+        ClusterProperties props;
+        for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
+            if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
+                uint16_t x = digiView[j].xx();
+                uint16_t y = digiView[j].yy();
+                uint16_t adc = digiView[j].adc();
+                props.minX = std::min(props.minX, static_cast<uint32_t>(x));
+                props.minY = std::min(props.minY, static_cast<uint32_t>(y));
+                props.maxX = std::max(props.maxX, static_cast<uint32_t>(x));
+                props.maxY = std::max(props.maxY, static_cast<uint32_t>(y));
+                props.charge += adc;
+            }
+        }
+        return props;
+    }
 
-  // Function to split a cluster into sub-clusters
-  template <typename TAcc>
-  ALPAKA_FN_ACC std::vector<ClusterProperties> splitCluster(
-      TAcc const& acc,
-      const ClusterProperties& clusterProps,
-      const GlobalVector& jetDir,
-      const SiPixelDigisSoAConstView& digiView,
-      uint32_t clusterIdx,
-      const edm::ESHandle<GeometricSearchTracker>& det) const {
+    // Determines if a cluster should be split
+    ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, const GlobalVector& jetDir) const {
+        return cluster.charge > 500 && (cluster.sizeX() > 2 || cluster.sizeY() > 2);
+    }
+
+    // Splits clusters into sub-clusters
+    template <typename TAcc>
+    ALPAKA_FN_ACC std::vector<ClusterProperties> splitCluster(
+        TAcc const& acc,
+        const ClusterProperties& clusterProps,
+        const GlobalVector& jetDir,
+        const SiPixelDigisSoAConstView& digiView,
+        uint32_t clusterIdx,
+        const edm::ESHandle<GeometricSearchTracker>& det) const {
         std::vector<ClusterProperties> subClusters;
 
         for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
-          if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
-            uint16_t x = digiView[j].xx();
-            uint16_t y = digiView[j].yy();
-            uint16_t adc = digiView[j].adc();
+            if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
+                uint16_t x = digiView[j].xx();
+                uint16_t y = digiView[j].yy();
+                uint16_t adc = digiView[j].adc();
 
-            // Calculate distance from jet direction
-            float dx = x - jetDir.x();
-            float dy = y - jetDir.y();
-            float distance = std::sqrt(dx * dx + dy * dy);
+                float dx = x - jetDir.x();
+                float dy = y - jetDir.y();
+                float distance = std::sqrt(dx * dx + dy * dy);
 
-            if (distance < 2.0f) { // Example threshold
-              // Check if this pixel belongs to an existing sub-cluster
-              bool found = false;
-              for (auto& subCluster : subClusters) {
-                if (isCloseToSubCluster(subCluster, x, y)) { // Placeholder function
-                  subCluster.minX = std::min(subCluster.minX, static_cast<uint32_t>(x));
-                  subCluster.minY = std::min(subCluster.minY, static_cast<uint32_t>(y));
-                  subCluster.maxX = std::max(subCluster.maxX, static_cast<uint32_t>(x));
-                  subCluster.maxY = std::max(subCluster.maxY, static_cast<uint32_t>(y));
-                  subCluster.charge += adc;
-                  found = true;
-                  break;
+                if (distance < 2.0f) {
+                    bool found = false;
+                    for (auto& subCluster : subClusters) {
+                        if (isCloseToSubCluster(subCluster, x, y)) { // Needs definition
+                            subCluster.charge += adc;
+                            subCluster.minX = std::min(subCluster.minX, x);
+                            subCluster.maxX = std::max(subCluster.maxX, x);
+                            subCluster.minY = std::min(subCluster.minY, y);
+                            subCluster.maxY = std::max(subCluster.maxY, y);
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        ClusterProperties newCluster;
+                        newCluster.minX = x;
+                        newCluster.maxX = x;
+                        newCluster.minY = y;
+                        newCluster.maxY = y;
+                        newCluster.charge = adc;
+                        subClusters.push_back(newCluster);
+                    }
                 }
-              }
-              // If no sub-cluster matches, create a new one
-              if (!found) {
-                ClusterProperties newSubCluster;
-                newSubCluster.minX = x;
-                newSubCluster.minY = y;
-                newSubCluster.maxX = x;
-                newSubCluster.maxY = y;
-                newSubCluster.charge = adc;
-                subClusters.push_back(newSubCluster);
-              }
             }
-          }
         }
 
         return subClusters;
-      }
+    }
 
+    // Placeholder for checking proximity to an existing sub-cluster
+    ALPAKA_FN_ACC bool isCloseToSubCluster(const ClusterProperties& subCluster, uint16_t x, uint16_t y) const {
+        return (x >= subCluster.minX - 1 && x <= subCluster.maxX + 1 &&
+                y >= subCluster.minY - 1 && y <= subCluster.maxY + 1);
+    }
 
-  // Helper function to determine if a pixel is close to a sub-cluster
-  ALPAKA_FN_ACC bool isCloseToSubCluster(const ClusterProperties& subCluster, uint16_t x, uint16_t y) const {
-    return std::abs(static_cast<int>(subCluster.minX) - x) <= 1 &&
-           std::abs(static_cast<int>(subCluster.minY) - y) <= 1;
-  }
-
-  // Helper function to get the cluster position (implement this based on your data)
-  GlobalPoint getClusterPosition(uint32_t clusterIdx, const SiPixelDigisSoAConstView& digiView) const {
-    // Placeholder: Assuming that cluster position is derived from the cluster data.
-    return GlobalPoint(0.0, 0.0, 0.0);  // Replace with actual cluster position calculation
-  }
-
-
+    // Placeholder for getting the cluster position
+    ALPAKA_FN_ACC GlobalPoint getClusterPosition(uint32_t clusterIdx, const SiPixelDigisSoAConstView& digiView,
+                                                 const edm::ESHandle<GeometricSearchTracker>& det) const {
+        // Implement logic to compute the global position of the cluster
+        return GlobalPoint(); // Placeholder
+    }
 };
 
-};
 */
+
+
+
 
 template <typename TrackerTraits>
 void runKernels(TrackingRecHitSoAView<TrackerTraits>& hitView,
                 SiPixelDigisSoAView& digiView,
                 SiPixelClustersSoAView& clustersView,
+                ZVertexSoAView& vertexView,
                 const CandidateGPUData* candidates,  // Updated to use CandidateGPUData
                 size_t nCandidates,                  // Added number of candidates
                 Queue& queue) {
@@ -328,13 +352,14 @@ void runKernels(TrackingRecHitSoAView<TrackerTraits>& hitView,
     auto workDiv = make_workdiv<Acc1D>(groups, items);
 
     // Kernel execution for hits, digis, clusters, and candidate data
-    alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, candidates, nCandidates);
+    alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, vertexView, candidates, nCandidates);
 }
 
 // Explicit template instantiation for Phase 1
 template void runKernels<pixelTopology::Phase1>(TrackingRecHitSoAView<pixelTopology::Phase1>& hitView,
                                                 SiPixelDigisSoAView& digiView,
                                                 SiPixelClustersSoAView& clustersView,
+                                                ZVertexSoAView& vertexView,
                                                 const CandidateGPUData* candidates,  // Updated to CandidateGPUData
                                                 size_t nCandidates,                  // Added number of candidates
                                                 Queue& queue);
@@ -343,6 +368,7 @@ template void runKernels<pixelTopology::Phase1>(TrackingRecHitSoAView<pixelTopol
 template void runKernels<pixelTopology::Phase2>(TrackingRecHitSoAView<pixelTopology::Phase2>& hitView,
                                                 SiPixelDigisSoAView& digiView,
                                                 SiPixelClustersSoAView& clustersView,
+                                                ZVertexSoAView& vertexView,
                                                 const CandidateGPUData* candidates,  // Updated to CandidateGPUData
                                                 size_t nCandidates,                  // Added number of candidates
                                                 Queue& queue);

@@ -7,5 +7,6 @@
 <use name="DataFormats/SiPixelClusterSoA"/>
 <use name="DataFormats/SiPixelDigi"/>
 <use name="DataFormats/Candidate"/>
+<use name="DataFormats/VertexSoA"/>
 <use name="HeterogeneousCore/AlpakaInterface"/>
 <flags ALPAKA_BACKENDS="!serial"/>

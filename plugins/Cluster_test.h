@@ -4,6 +4,7 @@
 #include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsSoA.h"
 #include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisSoA.h"
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersSoA.h"
+#include "DataFormats/VertexSoA/interface/ZVertexSoA.h"
 
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 
@@ -17,12 +18,15 @@ struct CandidateGPUData {
     float phi;
 };
 
+using namespace reco;
+
 namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
 
   template <typename TrackerTraits>
   void runKernels(TrackingRecHitSoAView<TrackerTraits>& hits,
                   SiPixelDigisSoAView& digis,
                   SiPixelClustersSoAView& clusters,
+                  ZVertexSoAView& vertexView,
                   const CandidateGPUData* candidates,  // Updated to use the GPU-specific data
                   size_t nCandidates,                 // Number of candidates
                   Queue& queue);
