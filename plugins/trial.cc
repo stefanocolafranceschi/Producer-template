@@ -2,15 +2,15 @@
 
 #include <memory>
 
-// user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
 #include "FWCore/Framework/interface/stream/EDProducer.h"
-
+#include "FWCore/Framework/interface/ESConsumesCollector.h"
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
-
+#include "FWCore/Framework/interface/ESHandle.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/Utilities/interface/StreamID.h"
+#include "FWCore/Utilities/interface/stringize.h"
 
 // system include files
 #include "TFile.h"
@@ -20,7 +20,6 @@
 #include <unistd.h>
 
 #include <alpaka/alpaka.hpp>
-
 
 #include "DataFormats/PatCandidates/interface/Jet.h"
 #include "DataFormats/PatCandidates/interface/PackedCandidate.h"
@@ -38,18 +37,23 @@
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersDevice.h"
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersHost.h"
 #include "DataFormats/SiPixelClusterSoA/interface/alpaka/SiPixelClustersSoACollection.h"
+#include "DataFormats/SiPixelCluster/interface/SiPixelCluster.h"
 
 #include "DataFormats/Common/interface/Handle.h"
 #include "DataFormats/Common/interface/DetSetVector.h"
-#include "DataFormats/SiPixelCluster/interface/SiPixelCluster.h"
 
 #include "DataFormats/VertexSoA/interface/ZVertexSoA.h"
 #include "DataFormats/VertexSoA/interface/ZVertexHost.h"
 #include "DataFormats/VertexSoA/interface/ZVertexDevice.h"
 #include "DataFormats/VertexSoA/interface/alpaka/ZVertexSoACollection.h"
 
-#include "FWCore/Utilities/interface/stringize.h"
+#include "DataFormats/GeometryVector/interface/VectorUtil.h"
+#include "DataFormats/TrackerCommon/interface/TrackerTopology.h"
+#include "Geometry/Records/interface/TrackerTopologyRcd.h"
+#include "Geometry/CommonDetUnit/interface/GlobalTrackingGeometry.h"
+#include "Geometry/CommonTopologies/interface/PixelTopology.h"
 #include "Geometry/CommonTopologies/interface/SimplePixelTopology.h"
+#include "Geometry/Records/interface/GlobalTrackingGeometryRecord.h"
 
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 #include "HeterogeneousCore/AlpakaInterface/interface/devices.h"
@@ -83,6 +87,8 @@ private:
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
   edm::EDGetTokenT<edm::View<reco::Candidate>> candidateToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection> zVertexToken_;
+  edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> const tTrackingGeom_;
+  edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> const tTrackerTopo_;
 
   const double ptMin_;
 };
@@ -98,6 +104,8 @@ trial::trial(const edm::ParameterSet& iConfig)
       recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
       candidateToken_(consumes<edm::View<reco::Candidate>>(edm::InputTag("candidateInput"))),
       zVertexToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection>(edm::InputTag("ZVertex"))),
+      tTrackingGeom_(esConsumes<GlobalTrackingGeometry, GlobalTrackingGeometryRecord>()),
+      tTrackerTopo_(esConsumes<TrackerTopology, TrackerTopologyRcd>()),
       ptMin_(iConfig.getParameter<double>("ptMin"))
         {
             // Initialize ROOT file
