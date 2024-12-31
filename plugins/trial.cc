@@ -12,10 +12,10 @@
 #include "FWCore/Utilities/interface/StreamID.h"
 #include "FWCore/Utilities/interface/stringize.h"
 
-// system include files
 #include "TFile.h"
 #include "TString.h"
-
+#include <vector>
+#include <tuple>
 #include <cstdlib>
 #include <unistd.h>
 
@@ -61,6 +61,9 @@
 #include "HeterogeneousCore/AlpakaInterface/interface/workdivision.h"
 
 #include "Cluster_test.h"
+#include "DataFormats/ClusterGeometrySoA/interface/ClusterGeometryLayout.h"
+#include "DataFormats/ClusterGeometrySoA/interface/alpaka/ClusterGeometrySoACollection.h"
+
 
 using namespace ALPAKA_ACCELERATOR_NAMESPACE;
 
@@ -82,6 +85,10 @@ private:
   TFile* rootFile_;
   std::vector<Device> devices_;
 
+  const double ptMin_;
+  float tanLorentzAngle_;
+  float tanLorentzAngleBarrelLayer1_;  
+
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
@@ -90,28 +97,27 @@ private:
   edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> const tTrackingGeom_;
   edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> const tTrackerTopo_;
 
-  const double ptMin_;
+  bool verbose_;
 };
-
 
 trial::trial(const edm::ParameterSet& iConfig)
     : configString_(iConfig.getParameter<std::string>("configString")),
       nHits_(iConfig.getParameter<uint32_t>("nHits")),
       offset_(iConfig.getParameter<int32_t>("offset")),
       rootFile_(nullptr),
+      ptMin_(iConfig.getParameter<double>("ptMin")),      
+      tanLorentzAngle_(iConfig.getParameter<double>("tanLorentzAngle")),
+      tanLorentzAngleBarrelLayer1_(iConfig.getParameter<double>("tanLorentzAngleBarrelLayer1")),
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
       recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
       candidateToken_(consumes<edm::View<reco::Candidate>>(edm::InputTag("candidateInput"))),
       zVertexToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection>(edm::InputTag("ZVertex"))),
-      tTrackingGeom_(esConsumes<GlobalTrackingGeometry, GlobalTrackingGeometryRecord>()),
-      tTrackerTopo_(esConsumes<TrackerTopology, TrackerTopologyRcd>()),
-      ptMin_(iConfig.getParameter<double>("ptMin"))
+      tTrackingGeom_(esConsumes()),
+      tTrackerTopo_(esConsumes()),
+      verbose_(iConfig.getParameter<bool>("verbose"))      
         {
-            // Initialize ROOT file
             rootFile_ = new TFile("config_output.root", "RECREATE");
-
-            // Register the product that this module will produce
             produces<std::vector<int>>("outputHits");
         }
 
@@ -140,6 +146,10 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         return;
     }
 
+
+    // ---------------------------------------------------------------
+    // RETRIEVE THE SOA COLLECTIONS TO BE USED IN THE KERNEL DEVICE
+    // (THE FOLLOWING DATA ARE ALREADY ALPAKA-FRIENDLY)
     edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clustersHandle;
     iEvent.getByToken(clusterToken_, clustersHandle);
     if (!clustersHandle.isValid()) {
@@ -159,18 +169,60 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     if (!recHitsHandle.isValid()) {
         edm::LogError("trial") << "Could not retrieve TrackingRecHitsSoA.";
         return;
-    }        
+    }
 
+    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection> zVertexHandle;
+    iEvent.getByToken(zVertexToken_, zVertexHandle);
+    if (!zVertexHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve zVertexHandle";
+        return;
+    }
+
+    // Process TrackingRecHitsSoACollection
+    const auto& recHits = *recHitsHandle;
+    size_t nHits = recHits.nHits();
+    if (verbose_) {
+        std::cout << "Number of hits: " << nHits << std::endl;
+    }
+
+    // Process SiPixelDigisSoACollection
+    const auto& digis = *digisHandle;
+    size_t nDigis = digis.nDigis();
+    if (verbose_) {
+        std::cout << "Number of digis: " << nDigis << std::endl;
+    }
+
+    // Process SiPixelClustersSoACollection
+    const auto& clusters = *clustersHandle;
+    uint32_t nClusters = clusters.nClusters();
+    if (verbose_) {
+        std::cout << "Total clusters in this event: " << nClusters << std::endl;
+    }
+
+    // Process ZVertexSoACollection
+    const auto& zVertices = *zVertexHandle;
+    uint32_t nVertices = zVertices.view().nvFinal();
+    if (verbose_) {
+        std::cout << "Number of Vertices: " << nVertices << std::endl;
+    }
+    
+    // -DONE WITH THE SOA STUFF-------------------------------------------------------------
+
+
+
+
+    // --------------------------------------------------------------------------
+    // RETRIEE THE NON-SOA DATA, NAMELY "Candidate" and "SiPixelClusters"
+
+    // Candidate is used for retrieving the jets --------------
     edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
     iEvent.getByToken(candidateToken_, candidatesHandle);
     if (!candidatesHandle.isValid()) {
         edm::LogError("trial") << "Could not retrieve Candidate collection.";
         return;
     }
-
     std::vector<CandidateGPUData> gpuCandidates;
     gpuCandidates.reserve(candidatesHandle->size());
-
 
     // Iterate over the candidates in the collection, filter them based on a minimum transverse momentum (ptMin_),
     // and prepare their data in a GPU-compatible format (CandidateGPUData) for further processing on the device.    
@@ -188,34 +240,58 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         }
     }
     auto const& candidates = *candidatesHandle;
+    // --------------------------------------------------------------------------
+    
 
-    edm::Handle<ALPAKA_ACCELERATOR_NAMESPACE::ZVertexSoACollection> zVertexHandle;
-    iEvent.getByToken(zVertexToken_, zVertexHandle);
-    if (!zVertexHandle.isValid()) {
-        edm::LogError("trial") << "Could not retrieve zVertexHandle";
+    // SiPixelClusters is used to get the geometry of each cluster ---------------
+    edm::Handle<edmNew::DetSetVector<SiPixelCluster>> inputPixelClustersHandle;
+    iEvent.getByToken(clusterToken_, inputPixelClustersHandle);
+    if (!inputPixelClustersHandle.isValid()) {
+        edm::LogError("trial") << "Could not retrieve SiPixelClusters.";
         return;
     }
-    
-    // Process TrackingRecHitsSoACollection
-    const auto& recHits = *recHitsHandle;
-    size_t nHits = recHits.nHits();
-    std::cout << "Number of hits: " << recHits.nHits() << std::endl;
 
-    // Process SiPixelDigisSoACollection
-    const auto& digis = *digisHandle;
-    size_t nDigis = digis.nDigis();
-    std::cout << "Number of digis: " << nDigis << std::endl;
+    // Retrieve TrackerGeometry, trackerTopology from EventSetup
+    const auto& trackingGeometry = iSetup.getData(tTrackingGeom_);
+    const auto& trackerTopology = iSetup.getData(tTrackerTopo_);
 
-    // Process SiPixelClustersSoACollection
-    const auto& clusters = *clustersHandle;
-    uint32_t nClusters = clusters.nClusters();
-    std::cout << "Total clusters in this event: " << nClusters << std::endl;
 
-    // Process ZVertexSoACollection
-    const auto& zVertices = *zVertexHandle;
-    uint32_t nVertices = zVertices.view().nvFinal();
-    std::cout << "Number of Vertices: " << nVertices << std::endl;
+    // Custom-made ClusterGeometry SoA -------------------------------------------
+    ClusterGeometrySoA dataSoA;
+    ClusterGeometrySoAView myview(dataSoA);  // Accessor for the columns in the SoA
 
+    // Loop through the SiPixelClusters and populate the ClusterGeometrySoA
+    for (auto detIt = inputPixelClustersHandle->begin(); detIt != inputPixelClustersHandle->end(); ++detIt) {
+        // detIt is now a reference to edmNew::DetSet<SiPixelCluster>
+        const edmNew::DetSet<SiPixelCluster>& detset = *detIt;
+
+        // Retrieve the GeomDet for this DetSet using its id
+        const GeomDet* det = trackingGeometry.idToDet(detset.id());  // Correct usage of geometry
+
+        if (!det) {
+            continue;  // Skip invalid detector IDs
+        }
+
+        // Extract geometry information
+        const PixelTopology& topo = static_cast<const PixelTopology&>(det->topology());
+        float pitchX, pitchY;
+        std::tie(pitchX, pitchY) = topo.pitch();
+        float thickness = det->surface().bounds().thickness();
+        float tanLorentzAngle = tanLorentzAngle_;  // Use the correct tanLorentzAngle from your context
+
+        // Populate the ClusterGeometrySoA with the information
+        size_t clusterIndex = 0;  // Track the index of the cluster in the DetSet
+        for (const auto& cluster : detset) {
+            // Access columns via the view and assign values
+            myview.clusterIds(clusterIndex) = detset.id();  // Directly use the id() (no rawId())
+            myview.pitchX(clusterIndex) = pitchX;
+            myview.pitchY(clusterIndex) = pitchY;
+            myview.thickness(clusterIndex) = thickness;
+            myview.tanLorentzAngles(clusterIndex) = tanLorentzAngle;
+            ++clusterIndex;
+        }
+    }
+    // -DONE WITH THE NON SOA STUFF---------------------------------------------------------------------------
 
     // Use event ID as the offset
     int32_t eventOffset = iEvent.id().event();
@@ -237,12 +313,12 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
 
         // ------------- CREATE DEVICE BUFFERS -------------------------------
+
         /* RecHits
            the TrackingRecHitsSoACollection is an alias for: TrackingRecHitDevice (gpu) 
                                                             TrackingRecHitHost (cpu)  */
         TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits, eventOffset, moduleStartD.data());
         //- - - - - - - - - - - - - - - - - - -
-
 
         /* Digis 
         the SiPixelDigisSoACollection is an alias for: SiPixelDigisDevice (gpu) or 
@@ -253,41 +329,62 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         tkdigi.setNModules(pixelTopology::Phase1::numberOfModules);         // Set additional metadata
         //- - - - - - - - - - - - - - - - - - -
 
-
         /* Clusters
            the SiPixelClustersSoACollection is an alias for: SiPixelClustersDevice (gpu) 
-                                                            SiPixelClustersHost (cpu)  */
-        SiPixelClustersSoACollection tkclusters(nClusters, queue);
-        // It seems the above class has no topology and no Modules.. not sure why
-
+                                                             SiPixelClustersHost (cpu)  */
+        SiPixelClustersSoACollection tkclusters(nClusters, queue); // It seems the above class has no topology and no Modules.. not sure why
+        //- - - - - - - - - - - - - - - - - - -
 
         /* Candidates
            I create Alpaka host buffer and device buffer (for GPU)*/
         auto gpuCandidatesHost = cms::alpakatools::make_host_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
         auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
-
-
-        ZVertexSoACollection tkvertices(queue);
-
         //- - - - - - - - - - - - - - - - - - -
 
+
+        /* Geometry
+           I create Alpaka host buffer and device buffer (for GPU)*/
+        ClusterGeometrySoACollection tkgeoclusters(nClusters, queue);
+        auto deviceView = tkgeoclusters.view();
+        //- - - - - - - - - - - - - - - - - - -
+
+        /* Vertices                    */
+        ZVertexSoACollection tkvertices(queue);
+        //- - - - - - - - - - - - - - - - - - -
 
 
         // ------------- COPY FROM HOST TO DEVICE BUFFERS -------------------------------
         alpaka::memcpy(queue, tkhit.buffer(), recHitsHandle->buffer());
         alpaka::memcpy(queue, tkdigi.buffer(), digisHandle->buffer());
         alpaka::memcpy(queue, tkclusters.buffer(), clustersHandle->buffer());
-        alpaka::memcpy(queue, tkvertices.buffer(), zVertexHandle->buffer());  // Transfer ZVertex data from host to device
-        std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());  // Copy data from std::vector to Alpaka host buffer
-        alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);          // Transfer data from host to device
-        alpaka::wait(queue);  // Ensure the transfer is complete
+        alpaka::memcpy(queue, tkvertices.buffer(), zVertexHandle->buffer());
 
+        // Copy the Candidates into Device          
+        std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());  // Copy data from std::vector to Alpaka host buffer
+        alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);          
+
+
+        // Copy the ClusterGeometry into Device
+        ClusterGeometryHost hostGeometry(nClusters, queue);  // Host-side wrapper
+        auto hostView = hostGeometry.view();
+        ClusterGeometrySoAView dataView(dataSoA); 
+
+        // Copy columns manually
+        for (size_t i = 0; i < nClusters; ++i) {
+            hostView.clusterIds(i) = dataView.clusterIds(i);
+            hostView.pitchX(i) = dataView.pitchX(i);
+            hostView.pitchY(i) = dataView.pitchY(i);
+            hostView.thickness(i) = dataView.thickness(i);
+            hostView.tanLorentzAngles(i) = dataView.tanLorentzAngles(i);
+        }
+        alpaka::memcpy(queue, tkgeoclusters.buffer(), hostGeometry.buffer());
+
+        alpaka::wait(queue);  // Ensure the transfer is complete
 
         // Run the kernel with GPU candidates
         Splitting::runKernels<pixelTopology::Phase1>(
-            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), queue
+            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), tkgeoclusters.view(), queue
         );
-
 
         // Update from device to host (RecHits and Digis)
         tkhit.updateFromDevice(queue);
@@ -298,6 +395,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         alpaka::wait(queue);
     }
 }
+
 
 
 void trial::endStream() {

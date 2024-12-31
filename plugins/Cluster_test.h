@@ -6,6 +6,9 @@
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersSoA.h"
 #include "DataFormats/VertexSoA/interface/ZVertexSoA.h"
 
+#include "DataFormats/ClusterGeometrySoA/interface/ClusterGeometryLayout.h"
+#include "DataFormats/ClusterGeometrySoA/interface/alpaka/ClusterGeometrySoACollection.h"
+
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
 
 // Define the structure for GPU Candidate data
@@ -18,6 +21,7 @@ struct CandidateGPUData {
     float phi;
 };
 
+
 using namespace reco;
 
 namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
@@ -29,6 +33,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   ZVertexSoAView& vertexView,
                   const CandidateGPUData* candidates,  // Updated to use the GPU-specific data
                   size_t nCandidates,                 // Number of candidates
+                  ClusterGeometrySoAView& geoclusters,
                   Queue& queue);
 
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting

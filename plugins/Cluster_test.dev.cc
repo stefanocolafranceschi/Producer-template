@@ -35,6 +35,9 @@
 #include "DataFormats/Math/interface/SSEVec.h"
 #include "DataFormats/Math/interface/ExtVec.h"
 
+#include "DataFormats/ClusterGeometrySoA/interface/ClusterGeometryLayout.h"
+#include "DataFormats/ClusterGeometrySoA/interface/alpaka/ClusterGeometrySoACollection.h"
+
 #include "Cluster_test.h"
 
 using namespace alpaka;
@@ -382,6 +385,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     ZVertexSoAView& vertexView,
                     const CandidateGPUData* candidates,  // Updated to use CandidateGPUData
                     size_t nCandidates,                  // Added number of candidates
+                    ClusterGeometrySoAView& geoclusters,
                     Queue& queue) {
         uint32_t items = 64;
         uint32_t groupsHits = divide_up_by(hitView.metadata().size(), items);
@@ -402,7 +406,8 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     SiPixelClustersSoAView& clustersView,
                                                     ZVertexSoAView& vertexView,
                                                     const CandidateGPUData* candidates,  
-                                                    size_t nCandidates,                  
+                                                    size_t nCandidates,  
+                                                    ClusterGeometrySoAView& geoclusters,
                                                     Queue& queue);
 
     // Explicit template instantiation for Phase 2
@@ -412,6 +417,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     ZVertexSoAView& vertexView,
                                                     const CandidateGPUData* candidates,
                                                     size_t nCandidates,                  
+                                                    ClusterGeometrySoAView& geoclusters,
                                                     Queue& queue);
   }  // namespace Splitting
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE
