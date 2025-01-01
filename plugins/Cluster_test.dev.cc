@@ -38,6 +38,9 @@
 #include "DataFormats/ClusterGeometrySoA/interface/ClusterGeometryLayout.h"
 #include "DataFormats/ClusterGeometrySoA/interface/alpaka/ClusterGeometrySoACollection.h"
 
+#include "DataFormats/CandidateSoA/interface/CandidateLayout.h"
+#include "DataFormats/CandidateSoA/interface/alpaka/CandidateSoACollection.h"
+
 #include "Cluster_test.h"
 
 using namespace alpaka;
@@ -56,8 +59,8 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                 SiPixelDigisSoAConstView digiView,
                                 SiPixelClustersSoAConstView clustersView,
                                 ZVertexSoAView vertexView,
-                                const CandidateGPUData* candidates,  // Updated to CandidateGPUData
-                                size_t nCandidates) const {         // Added number of candidates
+                                CandidateSoAView candidates,
+                                ClusterGeometrySoAView geoclusters) const {         // Added number of candidates
  
 
         // Print debug info for RecHits -----------------------------------
@@ -158,22 +161,21 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
         // Print debug info for Candidates -----------------------------------
         if (cms::alpakatools::once_per_grid(acc)) {
-          printf("Candidate Info:\n");
-          printf("nCandidates = %zu\n", nCandidates);
-        }
-        for (uint32_t c : cms::alpakatools::uniform_elements(acc, 10)) {
-          if (c < nCandidates) {  // Ensure index is within bounds
-            printf("Candidate %d -> px: %.2f, py: %.2f, pz: %.2f, pt: %.2f, eta: %.2f, phi: %.2f\n",
-                   c,
-                   candidates[c].px,
-                   candidates[c].py,
-                   candidates[c].pz,
-                   candidates[c].pt,
-                   candidates[c].eta,
-                   candidates[c].phi);
-          }
+            printf("Candidate Info:\n");
+            printf("nCandidates = %d\n", candidates.metadata().size());
         }
 
+        // Iterate over the candidates (assuming candidates are indexed from 0 to nCandidates-1)
+        for (uint32_t c : cms::alpakatools::uniform_elements(acc, candidates.metadata().size())) {
+            printf("Candidate %d -> px: %.2f, py: %.2f, pz: %.2f, pt: %.2f, eta: %.2f, phi: %.2f\n",
+                   c,
+                   candidates[c].px(),
+                   candidates[c].py(),
+                   candidates[c].pz(),
+                   candidates[c].pt(),
+                   candidates[c].eta(),
+                   candidates[c].phi());
+        }
 
 
         // Print debug info for Vertices -----------------------------------
@@ -192,9 +194,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         }
 
 
+
+
       }
     };
-
 
 
 
@@ -214,62 +217,58 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
             uint32_t sizeY() const { return maxY - minY + 1; }
         };
 
+        // Main operator function
+        template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
+        ALPAKA_FN_ACC void operator()(TAcc const& acc,
+                                      TrackingRecHitSoAConstView<TrackerTraits> hitView,
+                                      SiPixelDigisSoAConstView digiView,
+                                      SiPixelClustersSoAConstView clustersView,
+                                      ZVertexSoAView vertexView,
+                                      CandidateSoAView candidates,
+                                      ClusterGeometrySoAView geoclusters,
+                                      float ptMin_,
+                                      float deltaR_) const {
+            // Iterate over clusters
+            for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clustersView.metadata().size())) {
+                ClusterProperties clusterProps = computeClusterProperties(acc, digiView, clusterIdx);
 
-    // Main operator function
-    template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
-    ALPAKA_FN_ACC void operator()(TAcc const& acc,
-                                  TrackingRecHitSoAConstView<TrackerTraits> hitView,
-                                  SiPixelDigisSoAConstView digiView,
-                                  SiPixelClustersSoAConstView clustersView,
-                                  ZVertexSoAView vertexView,
-                                  const CandidateGPUData* candidates,
-                                  size_t nCandidates,
-                                  float ptMin_,
-                                  float deltaR_) const {
-        // Iterate over clusters
-        for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clustersView.metadata().size())) {
-            ClusterProperties clusterProps = computeClusterProperties(acc, digiView, clusterIdx);
+                // Fetch the cluster's position and geometry
+                auto clusterPosition = getClusterPosition(clusterIdx, hitView, clustersView);
+                float pitchX = geoclusters[clusterIdx].pitchX();
+                float pitchY = geoclusters[clusterIdx].pitchY();
+                float thickness = geoclusters[clusterIdx].thickness();
 
-            // Fetch the cluster's position components
-            float clusterX = 0.0f, clusterY = 0.0f, clusterZ = 0.0f;
-            if (clusterIdx < hitView.metadata().size()) {
-                clusterX = hitView[clusterIdx].xGlobal();
-                clusterY = hitView[clusterIdx].yGlobal();
-                clusterZ = hitView[clusterIdx].zGlobal();
-            }
+                // Loop through all candidates (jets)
+                for (uint32_t candIdx : cms::alpakatools::uniform_elements(acc, candidates.metadata().size())) {
+                    const auto& jet = candidates[candIdx];
 
-            // Loop through all candidates (jets)
-            for (size_t candIdx = 0; candIdx < nCandidates; ++candIdx) {
-                const auto& jet = candidates[candIdx];
+                    // Skip low-pt jets
+                    if (jet.pt() < ptMin_)
+                        continue;
 
-                // Skip low-pt jets
-                if (jet.pt < ptMin_)
-                    continue;
+                    // Extract jet direction components
+                    float jetPx = jet.px();
+                    float jetPy = jet.py();
+                    float jetPz = jet.pz();
 
-                // Extract jet direction components
-                float jetPx = jet.px;
-                float jetPy = jet.py;
-                float jetPz = jet.pz;
+                    // Calculate deltaR directly with scalar values
+                    float deltaEta = clusterPosition.y - jetPy; // Assuming eta = y
+                    float deltaPhi = clusterPosition.x - jetPx; // Assuming phi = x
+                    float deltaR = sqrt(deltaEta * deltaEta + deltaPhi * deltaPhi); // Simplified deltaR calculation
 
-                // Calculate deltaR directly with scalar values
-                float deltaEta = clusterY - jetPy; // Assuming eta = y
-                float deltaPhi = clusterX - jetPx; // Assuming phi = x
-                float deltaR = sqrt(deltaEta * deltaEta + deltaPhi * deltaPhi); // Simplified deltaR calculation
+                    // Check deltaR condition and split clusters if applicable
+                    if (deltaR < deltaR_ && shouldSplit(clusterProps, jet, pitchX, pitchY, thickness)) {
+                        auto subClusters = splitCluster(acc, clusterProps, jet, digiView, clusterIdx);
 
-                // Check deltaR condition and split clusters if applicable
-                if (deltaR < deltaR_ && shouldSplit(clusterProps, jet)) {
-                    auto subClusters = splitCluster(acc, clusterProps, jet, digiView, clusterIdx);
-
-                    // Print debug info for sub-clusters
-                    for (const auto& subCluster : subClusters) {
-                        printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
-                               subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
+                        // Print debug info for sub-clusters
+                        for (const auto& subCluster : subClusters) {
+                            printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
+                                   subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
+                        }
                     }
                 }
             }
         }
-                                  }
-
 
         // Computes cluster properties
         template <typename TAcc>
@@ -293,16 +292,18 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         }
 
         // Determines if a cluster should be split
-        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, const GlobalVector& jetDir) const {
-            return cluster.charge > 500 && (cluster.sizeX() > 2 || cluster.sizeY() > 2);
+        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, const CandidateSoAView& jetDir, float pitchX, float pitchY, float thickness) const {
+            // Add conditions based on geometry
+            return cluster.charge > 500 && (cluster.sizeX() * pitchX > 2 || cluster.sizeY() * pitchY > 2);
         }
+
 
         // Splits clusters into sub-clusters
         template <typename TAcc>
         ALPAKA_FN_ACC std::vector<ClusterProperties> splitCluster(
             TAcc const& acc,
             const ClusterProperties& clusterProps,
-            const GlobalVector& jetDir,
+            const CandidateSoAView& candidates,
             const SiPixelDigisSoAConstView& digiView,
             uint32_t clusterIdx) const {
             std::vector<ClusterProperties> subClusters;
@@ -313,32 +314,36 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     uint16_t y = digiView[j].yy();
                     uint16_t adc = digiView[j].adc();
 
-                    float dx = x - jetDir.x();
-                    float dy = y - jetDir.y();
-                    float distance = std::sqrt(dx * dx + dy * dy);
+                    for (int candIdx = 0; candIdx < static_cast<int>(candidates.metadata().size()); ++candIdx) {
+                        const auto jetDir = candidates[candIdx];
 
-                    if (distance < 2.0f) {
-                        bool found = false;
-                        for (auto& subCluster : subClusters) {
-                            if (isCloseToSubCluster(subCluster, x, y)) {
-                                subCluster.charge += adc;
-                                subCluster.minX = std::min(subCluster.minX, x);
-                                subCluster.maxX = std::max(subCluster.maxX, x);
-                                subCluster.minY = std::min(subCluster.minY, y);
-                                subCluster.maxY = std::max(subCluster.maxY, y);
-                                found = true;
-                                break;
+                        float dx = x - static_cast<float>(jetDir.px());
+                        float dy = y - static_cast<float>(jetDir.py());
+                        float distance = std::sqrt(dx * dx + dy * dy);
+
+                        if (distance < 2.0f) {
+                            bool found = false;
+                            for (auto& subCluster : subClusters) {
+                                if (isCloseToSubCluster(subCluster, x, y)) {
+                                    subCluster.charge += adc;
+                                    subCluster.minX = std::min(subCluster.minX, x);
+                                    subCluster.maxX = std::max(subCluster.maxX, x);
+                                    subCluster.minY = std::min(subCluster.minY, y);
+                                    subCluster.maxY = std::max(subCluster.maxY, y);
+                                    found = true;
+                                    break;
+                                }
                             }
-                        }
 
-                        if (!found) {
-                            ClusterProperties newCluster;
-                            newCluster.minX = x;
-                            newCluster.maxX = x;
-                            newCluster.minY = y;
-                            newCluster.maxY = y;
-                            newCluster.charge = adc;
-                            subClusters.push_back(newCluster);
+                            if (!found) {
+                                ClusterProperties newCluster;
+                                newCluster.minX = x;
+                                newCluster.maxX = x;
+                                newCluster.minY = y;
+                                newCluster.maxY = y;
+                                newCluster.charge = adc;
+                                subClusters.push_back(newCluster);
+                            }
                         }
                     }
                 }
@@ -347,32 +352,30 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
             return subClusters;
         }
 
+
         // Checks if a pixel is close to an existing sub-cluster
         ALPAKA_FN_ACC bool isCloseToSubCluster(const ClusterProperties& subCluster, uint16_t x, uint16_t y) const {
             return (x >= subCluster.minX - 1 && x <= subCluster.maxX + 1 &&
                     y >= subCluster.minY - 1 && y <= subCluster.maxY + 1);
         }
 
+        struct Position {
+            float x, y, z;
+        };
 
+        ALPAKA_FN_ACC Position getClusterPosition(uint32_t clusterIdx,
+                                                  TrackingRecHitSoAConstView<TrackerTraits> hitView,
+                                                  SiPixelClustersSoAConstView clustersView) const {
+            Position pos = {0.0f, 0.0f, 0.0f};  // Default to (0,0,0)
 
-    struct Position {
-        float x, y, z;
-    };
-
-    ALPAKA_FN_ACC Position getClusterPosition(uint32_t clusterIdx,
-                                               TrackingRecHitSoAConstView<TrackerTraits> hitView,
-                                               SiPixelClustersSoAConstView clustersView) const {
-        Position pos = {0.0f, 0.0f, 0.0f};  // Default to (0,0,0)
-        
-        if (clusterIdx < hitView.metadata().size()) {
-            pos.x = hitView[clusterIdx].xGlobal();
-            pos.y = hitView[clusterIdx].yGlobal();
-            pos.z = hitView[clusterIdx].zGlobal();
+            if (clusterIdx < hitView.metadata().size()) {
+                pos.x = hitView[clusterIdx].xGlobal();
+                pos.y = hitView[clusterIdx].yGlobal();
+                pos.z = hitView[clusterIdx].zGlobal();
+            }
+            return pos;
         }
-        return pos;
-    }
     };
-
 
 
 
@@ -383,8 +386,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     SiPixelDigisSoAView& digiView,
                     SiPixelClustersSoAView& clustersView,
                     ZVertexSoAView& vertexView,
-                    const CandidateGPUData* candidates,  // Updated to use CandidateGPUData
-                    size_t nCandidates,                  // Added number of candidates
+                    CandidateSoAView& candidates,
                     ClusterGeometrySoAView& geoclusters,
                     Queue& queue) {
         uint32_t items = 64;
@@ -397,7 +399,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         auto workDiv = make_workdiv<Acc1D>(groups, items);
 
         // Kernel execution for hits, digis, clusters, and candidate data
-        alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, vertexView, candidates, nCandidates);
+        alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, vertexView, candidates, geoclusters);
     }
 
     // Explicit template instantiation for Phase 1
@@ -405,8 +407,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     SiPixelDigisSoAView& digiView,
                                                     SiPixelClustersSoAView& clustersView,
                                                     ZVertexSoAView& vertexView,
-                                                    const CandidateGPUData* candidates,  
-                                                    size_t nCandidates,  
+                                                    CandidateSoAView& candidates,
                                                     ClusterGeometrySoAView& geoclusters,
                                                     Queue& queue);
 
@@ -415,8 +416,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     SiPixelDigisSoAView& digiView,
                                                     SiPixelClustersSoAView& clustersView,
                                                     ZVertexSoAView& vertexView,
-                                                    const CandidateGPUData* candidates,
-                                                    size_t nCandidates,                  
+                                                    CandidateSoAView& candidates,
                                                     ClusterGeometrySoAView& geoclusters,
                                                     Queue& queue);
   }  // namespace Splitting

@@ -64,6 +64,8 @@
 #include "DataFormats/ClusterGeometrySoA/interface/ClusterGeometryLayout.h"
 #include "DataFormats/ClusterGeometrySoA/interface/alpaka/ClusterGeometrySoACollection.h"
 
+#include "DataFormats/CandidateSoA/interface/CandidateLayout.h"
+#include "DataFormats/CandidateSoA/interface/alpaka/CandidateSoACollection.h"
 
 using namespace ALPAKA_ACCELERATOR_NAMESPACE;
 
@@ -212,7 +214,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
 
     // --------------------------------------------------------------------------
-    // RETRIEE THE NON-SOA DATA, NAMELY "Candidate" and "SiPixelClusters"
+    // RETRIEVE THE NON-SOA DATA, NAMELY "Candidate" and "SiPixelClusters"
 
     // Candidate is used for retrieving the jets --------------
     edm::Handle<edm::View<reco::Candidate>> candidatesHandle;
@@ -221,25 +223,29 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         edm::LogError("trial") << "Could not retrieve Candidate collection.";
         return;
     }
-    std::vector<CandidateGPUData> gpuCandidates;
-    gpuCandidates.reserve(candidatesHandle->size());
+    // Process Candidates
+    size_t nCandidates = candidatesHandle->size();  // Retrieve the number of candidates
+    if (verbose_) {
+        std::cout << "Number of Candidates: " << nCandidates << std::endl;
+    }
 
-    // Iterate over the candidates in the collection, filter them based on a minimum transverse momentum (ptMin_),
-    // and prepare their data in a GPU-compatible format (CandidateGPUData) for further processing on the device.    
+    // Populates the custom-made CandidateSoA -------------------------------------------
+    CandidateSoA candidatedataSoA;
+    CandidateSoAView candidateView(candidatedataSoA);  // Accessor for the columns in the SoA
+
+    // Iterate over the candidates and populate the CandidateSoA
+    size_t candidateIndex = 0;
     for (const auto& candidate : *candidatesHandle) {
-        if (candidate.pt() > ptMin_) {
-            CandidateGPUData data = {
-                static_cast<float>(candidate.px()),  // Cast to float
-                static_cast<float>(candidate.py()),  // Cast to float
-                static_cast<float>(candidate.pz()),  // Cast to float
-                static_cast<float>(candidate.pt()),  // Cast to float
-                static_cast<float>(candidate.eta()), // Cast to float
-                static_cast<float>(candidate.phi())  // Cast to float
-            };
-            gpuCandidates.push_back(data);
+        if (candidate.pt() > ptMin_) {  // Apply the ptMin_ filter
+            candidateView.px(candidateIndex) = static_cast<float>(candidate.px());
+            candidateView.py(candidateIndex) = static_cast<float>(candidate.py());
+            candidateView.pz(candidateIndex) = static_cast<float>(candidate.pz());
+            candidateView.pt(candidateIndex) = static_cast<float>(candidate.pt());
+            candidateView.eta(candidateIndex) = static_cast<float>(candidate.eta());
+            candidateView.phi(candidateIndex) = static_cast<float>(candidate.phi());
+            ++candidateIndex;
         }
     }
-    auto const& candidates = *candidatesHandle;
     // --------------------------------------------------------------------------
     
 
@@ -256,7 +262,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     const auto& trackerTopology = iSetup.getData(tTrackerTopo_);
 
 
-    // Custom-made ClusterGeometry SoA -------------------------------------------
+    // Populates the custom-made ClusterGeometry SoA -------------------------------------------
     ClusterGeometrySoA dataSoA;
     ClusterGeometrySoAView myview(dataSoA);  // Accessor for the columns in the SoA
 
@@ -292,6 +298,8 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         }
     }
     // -DONE WITH THE NON SOA STUFF---------------------------------------------------------------------------
+
+
 
     // Use event ID as the offset
     int32_t eventOffset = iEvent.id().event();
@@ -335,18 +343,17 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         SiPixelClustersSoACollection tkclusters(nClusters, queue); // It seems the above class has no topology and no Modules.. not sure why
         //- - - - - - - - - - - - - - - - - - -
 
-        /* Candidates
-           I create Alpaka host buffer and device buffer (for GPU)*/
-        auto gpuCandidatesHost = cms::alpakatools::make_host_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
-        auto gpuCandidatesDevice = cms::alpakatools::make_device_buffer<CandidateGPUData[]>(queue, gpuCandidates.size());
+        /* Candidates*/
+        CandidateSoACollection tkcandidates(nCandidates, queue);
+        auto CandidatesdeviceView = tkcandidates.view();
         //- - - - - - - - - - - - - - - - - - -
 
 
-        /* Geometry
-           I create Alpaka host buffer and device buffer (for GPU)*/
+        /* Geometry*/
         ClusterGeometrySoACollection tkgeoclusters(nClusters, queue);
         auto deviceView = tkgeoclusters.view();
         //- - - - - - - - - - - - - - - - - - -
+
 
         /* Vertices                    */
         ZVertexSoACollection tkvertices(queue);
@@ -359,9 +366,24 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         alpaka::memcpy(queue, tkclusters.buffer(), clustersHandle->buffer());
         alpaka::memcpy(queue, tkvertices.buffer(), zVertexHandle->buffer());
 
+
         // Copy the Candidates into Device          
-        std::copy(gpuCandidates.begin(), gpuCandidates.end(), gpuCandidatesHost.data());  // Copy data from std::vector to Alpaka host buffer
-        alpaka::memcpy(queue, gpuCandidatesDevice, gpuCandidatesHost);          
+        CandidateHost CandidatehostGeometry(nCandidates, queue);  // Host-side wrapper
+        auto CandidatehostView = CandidatehostGeometry.view();
+        CandidateSoAView CandidatedataView(candidatedataSoA); 
+
+        // Copy columns manually
+        for (size_t i = 0; i < nCandidates; ++i) {
+            CandidatehostView.candidateIndex(i) = CandidatedataView.candidateIndex(i);
+            CandidatehostView.px(i) = CandidatedataView.px(i);
+            CandidatehostView.py(i) = CandidatedataView.py(i);
+            CandidatehostView.pz(i) = CandidatedataView.pz(i);
+            CandidatehostView.pt(i) = CandidatedataView.pt(i);
+            CandidatehostView.eta(i) = CandidatedataView.eta(i);
+            CandidatehostView.phi(i) = CandidatedataView.phi(i);
+        }
+        alpaka::memcpy(queue, tkcandidates.buffer(), CandidatehostGeometry.buffer());
+
 
 
         // Copy the ClusterGeometry into Device
@@ -379,11 +401,15 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         }
         alpaka::memcpy(queue, tkgeoclusters.buffer(), hostGeometry.buffer());
 
+
+
+
+
         alpaka::wait(queue);  // Ensure the transfer is complete
 
         // Run the kernel with GPU candidates
         Splitting::runKernels<pixelTopology::Phase1>(
-            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), gpuCandidatesDevice.data(), gpuCandidates.size(), tkgeoclusters.view(), queue
+            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), tkgeoclusters.view(), queue
         );
 
         // Update from device to host (RecHits and Digis)
