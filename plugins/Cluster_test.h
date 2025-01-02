@@ -25,6 +25,13 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   ZVertexSoAView& vertexView,
                   CandidateSoAView& candidates,
                   ClusterGeometrySoAView& geoclusters,
+                  double ptMin_,
+                  double deltaR_,
+                  double chargeFracMin_,
+                  float expSizeXAtLorentzAngleIncidence_,
+                  float expSizeXDeltaPerTanAlpha_,
+                  float expSizeYAtNormalIncidence_,
+                  double centralMIPCharge_,
                   Queue& queue);
 
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting

@@ -88,9 +88,14 @@ private:
   std::vector<Device> devices_;
 
   const double ptMin_;
+  double deltaR_;
+  double chargeFracMin_;
   float tanLorentzAngle_;
   float tanLorentzAngleBarrelLayer1_;  
-
+  float expSizeXAtLorentzAngleIncidence_;
+  float expSizeXDeltaPerTanAlpha_;
+  float expSizeYAtNormalIncidence_;
+  double centralMIPCharge_;  
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
@@ -108,8 +113,14 @@ trial::trial(const edm::ParameterSet& iConfig)
       offset_(iConfig.getParameter<int32_t>("offset")),
       rootFile_(nullptr),
       ptMin_(iConfig.getParameter<double>("ptMin")),      
+      deltaR_(iConfig.getParameter<double>("deltaR")),      
+      chargeFracMin_(iConfig.getParameter<double>("chargeFracMin")),      
       tanLorentzAngle_(iConfig.getParameter<double>("tanLorentzAngle")),
       tanLorentzAngleBarrelLayer1_(iConfig.getParameter<double>("tanLorentzAngleBarrelLayer1")),
+      expSizeXAtLorentzAngleIncidence_(iConfig.getParameter<double>("expSizeXAtLorentzAngleIncidence")),
+      expSizeXDeltaPerTanAlpha_(iConfig.getParameter<double>("expSizeXDeltaPerTanAlpha")),
+      expSizeYAtNormalIncidence_(iConfig.getParameter<double>("expSizeYAtNormalIncidence")),
+      centralMIPCharge_(iConfig.getParameter<double>("centralMIPCharge")),      
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
       recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
@@ -409,8 +420,9 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
         // Run the kernel with GPU candidates
         Splitting::runKernels<pixelTopology::Phase1>(
-            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), tkgeoclusters.view(), queue
-        );
+            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), tkgeoclusters.view(), 
+            ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, queue);
+
 
         // Update from device to host (RecHits and Digis)
         tkhit.updateFromDevice(queue);

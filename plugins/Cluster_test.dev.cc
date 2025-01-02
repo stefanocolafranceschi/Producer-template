@@ -164,7 +164,6 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
             printf("Candidate Info:\n");
             printf("nCandidates = %d\n", candidates.metadata().size());
         }
-
         // Iterate over the candidates (assuming candidates are indexed from 0 to nCandidates-1)
         for (uint32_t c : cms::alpakatools::uniform_elements(acc, candidates.metadata().size())) {
             printf("Candidate %d -> px: %.2f, py: %.2f, pz: %.2f, pt: %.2f, eta: %.2f, phi: %.2f\n",
@@ -193,6 +192,21 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                  vertexView[v].sortInd());
         }
 
+
+        // Print debug info for ClusterGeometry -----------------------------------
+        if (cms::alpakatools::once_per_grid(acc)) {
+          printf("ClusterGeometry Info:\n");
+          printf("nClusterGeometries = %d\n", geoclusters.metadata().size());
+        }
+        for (uint32_t g : cms::alpakatools::uniform_elements(acc, 10)) {
+          printf("geoclusters %d -> clusterId: %d, pitchX: %.2f, pitchY: %.2f, thickness: %.2f, tanLorentzAngle: %.2f\n",
+                 g,
+                 geoclusters[g].clusterIds(),
+                 geoclusters[g].pitchX(),
+                 geoclusters[g].pitchY(),
+                 geoclusters[g].thickness(),
+                 geoclusters[g].tanLorentzAngles());
+        }
 
 
 
@@ -226,8 +240,13 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                       ZVertexSoAView vertexView,
                                       CandidateSoAView candidates,
                                       ClusterGeometrySoAView geoclusters,
-                                      float ptMin_,
-                                      float deltaR_) const {
+                                      double ptMin_,
+                                      double deltaR_,
+                                      double chargeFracMin_,
+                                      float expSizeXAtLorentzAngleIncidence_,
+                                      float expSizeXDeltaPerTanAlpha_,
+                                      float expSizeYAtNormalIncidence_,
+                                      double centralMIPCharge_) const {
             // Iterate over clusters
             for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clustersView.metadata().size())) {
                 ClusterProperties clusterProps = computeClusterProperties(acc, digiView, clusterIdx);
@@ -252,19 +271,27 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     float jetPz = jet.pz();
 
                     // Calculate deltaR directly with scalar values
-                    float deltaEta = clusterPosition.y - jetPy; // Assuming eta = y
-                    float deltaPhi = clusterPosition.x - jetPx; // Assuming phi = x
-                    float deltaR = sqrt(deltaEta * deltaEta + deltaPhi * deltaPhi); // Simplified deltaR calculation
+                    // because I couldn't work with the geometry class inside alpaka :-(
+                    float deltaEta = clusterPosition.y - jetPy;
+                    float deltaPhi = clusterPosition.x - jetPx;
+                    float deltaR = sqrt(deltaEta * deltaEta + deltaPhi * deltaPhi);
 
                     // Check deltaR condition and split clusters if applicable
-                    if (deltaR < deltaR_ && shouldSplit(clusterProps, jet, pitchX, pitchY, thickness)) {
-                        auto subClusters = splitCluster(acc, clusterProps, jet, digiView, clusterIdx);
+                    if (deltaR < deltaR_ && shouldSplit(clusterProps, jetPx, jetPy, jetPz, pitchX, pitchY, thickness,
+                                                        geoclusters[clusterIdx].tanLorentzAngles(), 
+                                                        chargeFracMin_,
+                                                        expSizeXAtLorentzAngleIncidence_, 
+                                                        expSizeXDeltaPerTanAlpha_,
+                                                        expSizeYAtNormalIncidence_,
+                                                        centralMIPCharge_)) {
+                        auto subClusters = splitCluster(acc, clusterProps, candidates, digiView, clusterIdx);
 
                         // Print debug info for sub-clusters
                         for (const auto& subCluster : subClusters) {
                             printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
                                    subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
                         }
+
                     }
                 }
             }
@@ -292,9 +319,37 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         }
 
         // Determines if a cluster should be split
-        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, const CandidateSoAView& jetDir, float pitchX, float pitchY, float thickness) const {
-            // Add conditions based on geometry
-            return cluster.charge > 500 && (cluster.sizeX() * pitchX > 2 || cluster.sizeY() * pitchY > 2);
+        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, 
+                                       float jetPx, 
+                                       float jetPy, 
+                                       float jetPz,                                        
+                                       float pitchX, 
+                                       float pitchY, 
+                                       float thickness,
+                                       float tanLorentzAngles,
+                                       double chargeFracMin_,
+                                       float expSizeXAtLorentzAngleIncidence_,
+                                       float expSizeXDeltaPerTanAlpha_,
+                                       float expSizeYAtNormalIncidence_,
+                                       double centralMIPCharge_) const {
+
+            float jetTanAlpha = jetPx / jetPz;
+            float jetTanBeta = jetPy / jetPz;
+            float jetZOverRho = std::sqrt(jetTanAlpha * jetTanAlpha + jetTanBeta * jetTanBeta);
+
+            float expSizeX = expSizeXAtLorentzAngleIncidence_ +
+                             std::abs(expSizeXDeltaPerTanAlpha_ * (jetTanAlpha - tanLorentzAngles));
+            float expSizeY = std::sqrt((expSizeYAtNormalIncidence_ * expSizeYAtNormalIncidence_) +
+                                       thickness * thickness / (pitchY * pitchY) * jetTanBeta * jetTanBeta);
+            
+            if (expSizeX < 1.f)
+                expSizeX = 1.f;
+            if (expSizeY < 1.f)
+                expSizeY = 1.f;
+
+            float expCharge = std::sqrt(1.08f + jetZOverRho * jetZOverRho) * centralMIPCharge_;
+            return cluster.charge > expCharge * chargeFracMin_ &&
+                   (cluster.sizeX() > expSizeX + 1 || cluster.sizeY() > expSizeY + 1);
         }
 
 
@@ -326,10 +381,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                             for (auto& subCluster : subClusters) {
                                 if (isCloseToSubCluster(subCluster, x, y)) {
                                     subCluster.charge += adc;
-                                    subCluster.minX = std::min(subCluster.minX, x);
-                                    subCluster.maxX = std::max(subCluster.maxX, x);
-                                    subCluster.minY = std::min(subCluster.minY, y);
-                                    subCluster.maxY = std::max(subCluster.maxY, y);
+                                    subCluster.minX = std::min(subCluster.minX, static_cast<uint32_t>(x));
+                                    subCluster.maxX = std::max(subCluster.maxX, static_cast<uint32_t>(x));
+                                    subCluster.minY = std::min(subCluster.minY, static_cast<uint32_t>(y));
+                                    subCluster.maxY = std::max(subCluster.maxY, static_cast<uint32_t>(y));
                                     found = true;
                                     break;
                                 }
@@ -379,8 +434,6 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
 
 
-
-
     template <typename TrackerTraits>
     void runKernels(TrackingRecHitSoAView<TrackerTraits>& hitView,
                     SiPixelDigisSoAView& digiView,
@@ -388,18 +441,41 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     ZVertexSoAView& vertexView,
                     CandidateSoAView& candidates,
                     ClusterGeometrySoAView& geoclusters,
+                    double ptMin_,
+                    double deltaR_,
+                    double chargeFracMin_,
+                    float expSizeXAtLorentzAngleIncidence_,
+                    float expSizeXDeltaPerTanAlpha_,
+                    float expSizeYAtNormalIncidence_,
+                    double centralMIPCharge_,
                     Queue& queue) {
         uint32_t items = 64;
         uint32_t groupsHits = divide_up_by(hitView.metadata().size(), items);
         uint32_t groupsDigis = divide_up_by(digiView.metadata().size(), items);
         uint32_t groupsClusters = divide_up_by(clustersView.metadata().size(), items);
 
-        uint32_t groups = std::max({groupsHits, groupsDigis, groupsClusters});  // Ensure work division covers all three views
+        uint32_t groups = std::max({groupsHits, groupsDigis, groupsClusters});
 
         auto workDiv = make_workdiv<Acc1D>(groups, items);
 
         // Kernel execution for hits, digis, clusters, and candidate data
         alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, vertexView, candidates, geoclusters);
+        alpaka::exec<Acc1D>(queue, 
+                            workDiv, 
+                            JetSplit<TrackerTraits>{}, 
+                            hitView, 
+                            digiView, 
+                            clustersView, 
+                            vertexView, 
+                            candidates, 
+                            geoclusters,
+                            ptMin_,
+                            deltaR_,
+                            chargeFracMin_,
+                            expSizeXAtLorentzAngleIncidence_,
+                            expSizeXDeltaPerTanAlpha_,
+                            expSizeYAtNormalIncidence_,
+                            centralMIPCharge_);
     }
 
     // Explicit template instantiation for Phase 1
@@ -409,6 +485,13 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     ZVertexSoAView& vertexView,
                                                     CandidateSoAView& candidates,
                                                     ClusterGeometrySoAView& geoclusters,
+                                                    double ptMin_,
+                                                    double deltaR_,
+                                                    double chargeFracMin_,
+                                                    float expSizeXAtLorentzAngleIncidence_,
+                                                    float expSizeXDeltaPerTanAlpha_,
+                                                    float expSizeYAtNormalIncidence_,
+                                                    double centralMIPCharge_,
                                                     Queue& queue);
 
     // Explicit template instantiation for Phase 2
@@ -418,6 +501,13 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     ZVertexSoAView& vertexView,
                                                     CandidateSoAView& candidates,
                                                     ClusterGeometrySoAView& geoclusters,
+                                                    double ptMin_,
+                                                    double deltaR_,
+                                                    double chargeFracMin_,
+                                                    float expSizeXAtLorentzAngleIncidence_,
+                                                    float expSizeXDeltaPerTanAlpha_,
+                                                    float expSizeYAtNormalIncidence_,
+                                                    double centralMIPCharge_,                                                    
                                                     Queue& queue);
   }  // namespace Splitting
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE
