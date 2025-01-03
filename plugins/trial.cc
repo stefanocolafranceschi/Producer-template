@@ -418,10 +418,17 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
         alpaka::wait(queue);  // Ensure the transfer is complete
 
+        // Declare the host-side container for storing the output clusters
+        std::array<ClusterProperties, 10> hostClusters; 
+
+
         // Run the kernel with GPU candidates
         Splitting::runKernels<pixelTopology::Phase1>(
-            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), tkgeoclusters.view(), 
-            ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, queue);
+            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), 
+            tkgeoclusters.view(), ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, 
+            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, queue);
+
+//alpaka::memcpy(queue, hostClusters.data(), subClusters.buffer(), subClusters.size());
 
 
         // Update from device to host (RecHits and Digis)

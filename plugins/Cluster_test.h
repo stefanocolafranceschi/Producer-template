@@ -16,6 +16,32 @@
 
 using namespace reco;
 
+        // Cluster properties structure
+        struct ClusterProperties {
+            uint32_t minX = std::numeric_limits<uint32_t>::max();
+            uint32_t minY = std::numeric_limits<uint32_t>::max();
+            uint32_t maxX = 0;
+            uint32_t maxY = 0;
+            uint32_t charge = 0;
+
+            // Fields to store error information after splitting
+            float splitClusterErrorX = 0.0f;
+            float splitClusterErrorY = 0.0f;
+
+            // Device-compatible sizeX() and sizeY() methods
+            ALPAKA_FN_ACC uint32_t sizeX() const {
+                return maxX - minX + 1;
+            }
+
+            ALPAKA_FN_ACC uint32_t sizeY() const {
+                return maxY - minY + 1;
+            }
+
+            ALPAKA_FN_ACC float getChargeAsFloat() const {
+                return static_cast<float>(charge);
+            }
+        };
+
 namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
 
   template <typename TrackerTraits>

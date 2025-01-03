@@ -60,7 +60,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                 SiPixelClustersSoAConstView clustersView,
                                 ZVertexSoAView vertexView,
                                 CandidateSoAView candidates,
-                                ClusterGeometrySoAView geoclusters) const {         // Added number of candidates
+                                ClusterGeometrySoAView geoclusters) const {         
  
 
         // Print debug info for RecHits -----------------------------------
@@ -219,17 +219,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
     template <typename TrackerTraits>
     struct JetSplit {
-        // Cluster properties structure
-        struct ClusterProperties {
-            uint32_t minX = std::numeric_limits<uint32_t>::max();
-            uint32_t minY = std::numeric_limits<uint32_t>::max();
-            uint32_t maxX = 0;
-            uint32_t maxY = 0;
-            uint32_t charge = 0;
 
-            uint32_t sizeX() const { return maxX - minX + 1; }
-            uint32_t sizeY() const { return maxY - minY + 1; }
-        };
 
         // Main operator function
         template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>
@@ -271,27 +261,33 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     float jetPz = jet.pz();
 
                     // Calculate deltaR directly with scalar values
-                    // because I couldn't work with the geometry class inside alpaka :-(
                     float deltaEta = clusterPosition.y - jetPy;
                     float deltaPhi = clusterPosition.x - jetPx;
                     float deltaR = sqrt(deltaEta * deltaEta + deltaPhi * deltaPhi);
 
                     // Check deltaR condition and split clusters if applicable
                     if (deltaR < deltaR_ && shouldSplit(clusterProps, jetPx, jetPy, jetPz, pitchX, pitchY, thickness,
-                                                        geoclusters[clusterIdx].tanLorentzAngles(), 
+                                                        geoclusters[clusterIdx].tanLorentzAngles(),
                                                         chargeFracMin_,
-                                                        expSizeXAtLorentzAngleIncidence_, 
+                                                        expSizeXAtLorentzAngleIncidence_,
                                                         expSizeXDeltaPerTanAlpha_,
                                                         expSizeYAtNormalIncidence_,
                                                         centralMIPCharge_)) {
-                        auto subClusters = splitCluster(acc, clusterProps, candidates, digiView, clusterIdx);
+                        // Using a fixed-size array for sub-clusters
+                        const int maxSubClusters = 10;          // Max limit
+                        ClusterProperties subClusters[maxSubClusters];
+
+                        int subClusterCount = 0;
+
+                        // Split the cluster into sub-clusters
+                        splitCluster(acc, clusterProps, candidates, digiView, clusterIdx, subClusters, subClusterCount);
 
                         // Print debug info for sub-clusters
-                        for (const auto& subCluster : subClusters) {
+                        for (int i = 0; i < subClusterCount; ++i) {
+                            const auto& subCluster = subClusters[i];
                             printf("Sub-cluster -> minX: %d, minY: %d, maxX: %d, maxY: %d, charge: %d\n",
                                    subCluster.minX, subCluster.minY, subCluster.maxX, subCluster.maxY, subCluster.charge);
                         }
-
                     }
                 }
             }
@@ -319,12 +315,12 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         }
 
         // Determines if a cluster should be split
-        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster, 
-                                       float jetPx, 
-                                       float jetPy, 
-                                       float jetPz,                                        
-                                       float pitchX, 
-                                       float pitchY, 
+        ALPAKA_FN_ACC bool shouldSplit(const ClusterProperties& cluster,
+                                       float jetPx,
+                                       float jetPy,
+                                       float jetPz,
+                                       float pitchX,
+                                       float pitchY,
                                        float thickness,
                                        float tanLorentzAngles,
                                        double chargeFracMin_,
@@ -341,7 +337,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                              std::abs(expSizeXDeltaPerTanAlpha_ * (jetTanAlpha - tanLorentzAngles));
             float expSizeY = std::sqrt((expSizeYAtNormalIncidence_ * expSizeYAtNormalIncidence_) +
                                        thickness * thickness / (pitchY * pitchY) * jetTanBeta * jetTanBeta);
-            
+
             if (expSizeX < 1.f)
                 expSizeX = 1.f;
             if (expSizeY < 1.f)
@@ -352,17 +348,15 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                    (cluster.sizeX() > expSizeX + 1 || cluster.sizeY() > expSizeY + 1);
         }
 
-
-        // Splits clusters into sub-clusters
+        // Splits clusters into sub-clusters and stores them in a fixed-size array
         template <typename TAcc>
-        ALPAKA_FN_ACC std::vector<ClusterProperties> splitCluster(
-            TAcc const& acc,
-            const ClusterProperties& clusterProps,
-            const CandidateSoAView& candidates,
-            const SiPixelDigisSoAConstView& digiView,
-            uint32_t clusterIdx) const {
-            std::vector<ClusterProperties> subClusters;
-
+        ALPAKA_FN_ACC void splitCluster(TAcc const& acc,
+                                         const ClusterProperties& clusterProps,
+                                         const CandidateSoAView& candidates,
+                                         const SiPixelDigisSoAConstView& digiView,
+                                         uint32_t clusterIdx,
+                                         ClusterProperties* subClusters,
+                                         int& subClusterCount) const {
             for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
                 if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
                     uint16_t x = digiView[j].xx();
@@ -378,35 +372,31 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
                         if (distance < 2.0f) {
                             bool found = false;
-                            for (auto& subCluster : subClusters) {
-                                if (isCloseToSubCluster(subCluster, x, y)) {
-                                    subCluster.charge += adc;
-                                    subCluster.minX = std::min(subCluster.minX, static_cast<uint32_t>(x));
-                                    subCluster.maxX = std::max(subCluster.maxX, static_cast<uint32_t>(x));
-                                    subCluster.minY = std::min(subCluster.minY, static_cast<uint32_t>(y));
-                                    subCluster.maxY = std::max(subCluster.maxY, static_cast<uint32_t>(y));
+                            for (int i = 0; i < subClusterCount; ++i) {
+                                if (isCloseToSubCluster(subClusters[i], x, y)) {
+                                    subClusters[i].charge += adc;
+                                    subClusters[i].minX = std::min(subClusters[i].minX, static_cast<uint32_t>(x));
+                                    subClusters[i].maxX = std::max(subClusters[i].maxX, static_cast<uint32_t>(x));
+                                    subClusters[i].minY = std::min(subClusters[i].minY, static_cast<uint32_t>(y));
+                                    subClusters[i].maxY = std::max(subClusters[i].maxY, static_cast<uint32_t>(y));
                                     found = true;
                                     break;
                                 }
                             }
 
-                            if (!found) {
-                                ClusterProperties newCluster;
-                                newCluster.minX = x;
-                                newCluster.maxX = x;
-                                newCluster.minY = y;
-                                newCluster.maxY = y;
-                                newCluster.charge = adc;
-                                subClusters.push_back(newCluster);
+                            if (!found && subClusterCount < 10) { // Ensure we don't exceed the max sub-clusters
+                                subClusters[subClusterCount].minX = x;
+                                subClusters[subClusterCount].maxX = x;
+                                subClusters[subClusterCount].minY = y;
+                                subClusters[subClusterCount].maxY = y;
+                                subClusters[subClusterCount].charge = adc;
+                                ++subClusterCount;
                             }
                         }
                     }
                 }
             }
-
-            return subClusters;
         }
-
 
         // Checks if a pixel is close to an existing sub-cluster
         ALPAKA_FN_ACC bool isCloseToSubCluster(const ClusterProperties& subCluster, uint16_t x, uint16_t y) const {
@@ -421,9 +411,9 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
         ALPAKA_FN_ACC Position getClusterPosition(uint32_t clusterIdx,
                                                   TrackingRecHitSoAConstView<TrackerTraits> hitView,
                                                   SiPixelClustersSoAConstView clustersView) const {
-            Position pos = {0.0f, 0.0f, 0.0f};  // Default to (0,0,0)
+            Position pos = {0.0f, 0.0f, 0.0f};      // Default to (0,0,0)
 
-            if (clusterIdx < hitView.metadata().size()) {
+            if (clusterIdx < static_cast<uint32_t>(hitView.metadata().size())) {
                 pos.x = hitView[clusterIdx].xGlobal();
                 pos.y = hitView[clusterIdx].yGlobal();
                 pos.z = hitView[clusterIdx].zGlobal();
@@ -458,7 +448,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
         auto workDiv = make_workdiv<Acc1D>(groups, items);
 
-        // Kernel execution for hits, digis, clusters, and candidate data
+        // Kernel execution
         alpaka::exec<Acc1D>(queue, workDiv, Printout<TrackerTraits>{}, hitView, digiView, clustersView, vertexView, candidates, geoclusters);
         alpaka::exec<Acc1D>(queue, 
                             workDiv, 
