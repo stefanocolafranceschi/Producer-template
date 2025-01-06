@@ -1,6 +1,8 @@
 #ifndef DataFormats_SiPixelClusterSoA_test_alpaka_Hits_test_h
 #define DataFormats_SiPixelClusterSoA_test_alpaka_Hits_test_h
 
+//#include <alpaka/alpaka.hpp>
+
 #include "DataFormats/TrackingRecHitSoA/interface/TrackingRecHitsSoA.h"
 #include "DataFormats/SiPixelDigiSoA/interface/SiPixelDigisSoA.h"
 #include "DataFormats/SiPixelClusterSoA/interface/SiPixelClustersSoA.h"
@@ -13,6 +15,9 @@
 #include "DataFormats/CandidateSoA/interface/alpaka/CandidateSoACollection.h"
 
 #include "HeterogeneousCore/AlpakaInterface/interface/config.h"
+
+#include <alpaka/alpaka.hpp>
+
 
 using namespace reco;
 
@@ -58,6 +63,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   float expSizeXDeltaPerTanAlpha_,
                   float expSizeYAtNormalIncidence_,
                   double centralMIPCharge_,
+                  SiPixelDigisSoAView& subCluster,
                   Queue& queue);
 
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting

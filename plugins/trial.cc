@@ -413,28 +413,24 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         alpaka::memcpy(queue, tkgeoclusters.buffer(), hostGeometry.buffer());
 
 
-
+        // Initialize SoA for Sub-Clusters
+        SiPixelDigisSoACollection tksubclusters(10, queue);
 
 
         alpaka::wait(queue);  // Ensure the transfer is complete
 
-        // Declare the host-side container for storing the output clusters
-        std::array<ClusterProperties, 10> hostClusters; 
-
-
-        // Run the kernel with GPU candidates
+        // Execute the kernel
         Splitting::runKernels<pixelTopology::Phase1>(
             tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), 
             tkgeoclusters.view(), ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, 
-            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, queue);
+            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, tksubclusters.view(), queue);
 
-//alpaka::memcpy(queue, hostClusters.data(), subClusters.buffer(), subClusters.size());
-
-
-        // Update from device to host (RecHits and Digis)
+  
+        // Update from device to host (RecHits, Digis, Sub-Clusters)
         tkhit.updateFromDevice(queue);
         TrackingRecHitHost<pixelTopology::Phase1> hostRecHits = cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkhit);
         SiPixelDigisHost digisHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tkdigi);
+        SiPixelDigisHost subClustersHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tksubclusters);
         SiPixelClustersHost clustersHost = cms::alpakatools::CopyToHost<SiPixelClustersDevice<Device>>::copyAsync(queue, tkclusters);
 
         alpaka::wait(queue);
