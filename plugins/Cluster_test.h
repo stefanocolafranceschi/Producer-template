@@ -63,6 +63,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   float expSizeXDeltaPerTanAlpha_,
                   float expSizeYAtNormalIncidence_,
                   double centralMIPCharge_,
+                  double chargePerUnit_,
                   SiPixelDigisSoAView& subCluster,
                   Queue& queue);
 

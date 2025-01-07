@@ -95,7 +95,8 @@ private:
   float expSizeXAtLorentzAngleIncidence_;
   float expSizeXDeltaPerTanAlpha_;
   float expSizeYAtNormalIncidence_;
-  double centralMIPCharge_;  
+  double centralMIPCharge_;
+  double chargePerUnit_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>> recHitsToken_;
@@ -120,7 +121,8 @@ trial::trial(const edm::ParameterSet& iConfig)
       expSizeXAtLorentzAngleIncidence_(iConfig.getParameter<double>("expSizeXAtLorentzAngleIncidence")),
       expSizeXDeltaPerTanAlpha_(iConfig.getParameter<double>("expSizeXDeltaPerTanAlpha")),
       expSizeYAtNormalIncidence_(iConfig.getParameter<double>("expSizeYAtNormalIncidence")),
-      centralMIPCharge_(iConfig.getParameter<double>("centralMIPCharge")),      
+      centralMIPCharge_(iConfig.getParameter<double>("centralMIPCharge")),
+      chargePerUnit_(iConfig.getParameter<double>("chargePerUnit_")),            
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
       recHitsToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::TrackingRecHitsSoACollection<pixelTopology::Phase1>>(edm::InputTag("TrackingRecHitsSoA"))),
@@ -423,7 +425,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         Splitting::runKernels<pixelTopology::Phase1>(
             tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), 
             tkgeoclusters.view(), ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, 
-            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, tksubclusters.view(), queue);
+            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, chargePerUnit_, tksubclusters.view(), queue);
 
   
         // Update from device to host (RecHits, Digis, Sub-Clusters)
