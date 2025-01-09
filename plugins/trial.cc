@@ -338,7 +338,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         /* RecHits
            the TrackingRecHitsSoACollection is an alias for: TrackingRecHitDevice (gpu) 
                                                             TrackingRecHitHost (cpu)  */
-        TrackingRecHitsSoACollection<pixelTopology::Phase1> tkhit(queue, nHits, eventOffset, moduleStartD.data());
+        TrackingRecHitsSoACollection<pixelTopology::Phase1> tkHit(queue, nHits, eventOffset, moduleStartD.data());
         //- - - - - - - - - - - - - - - - - - -
 
         /* Digis 
@@ -346,19 +346,19 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
                                                           SiPixelDigisHost (cpu)
         but it's not templated so <pixelTopology> won't work
         I could also: SiPixelDigisDevice<Device> digisDevice(nDigis, queue); */
-        SiPixelDigisSoACollection tkdigi(nDigis, queue);
-        tkdigi.setNModules(pixelTopology::Phase1::numberOfModules);         // Set additional metadata
+        SiPixelDigisSoACollection tkDigi(nDigis, queue);
+        tkDigi.setNModules(pixelTopology::Phase1::numberOfModules);         // Set additional metadata
         //- - - - - - - - - - - - - - - - - - -
 
         /* Clusters
            the SiPixelClustersSoACollection is an alias for: SiPixelClustersDevice (gpu) 
                                                              SiPixelClustersHost (cpu)  */
-        SiPixelClustersSoACollection tkclusters(nClusters, queue); // It seems the above class has no topology and no Modules.. not sure why
+        SiPixelClustersSoACollection tkClusters(nClusters, queue); // It seems the above class has no topology and no Modules.. not sure why
         //- - - - - - - - - - - - - - - - - - -
 
         /* Candidates*/
-        CandidateSoACollection tkcandidates(nCandidates, queue);
-        auto CandidatesdeviceView = tkcandidates.view();
+        CandidateSoACollection tkCandidates(nCandidates, queue);
+        auto CandidatesdeviceView = tkCandidates.view();
         //- - - - - - - - - - - - - - - - - - -
 
 
@@ -369,15 +369,22 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
 
         /* Vertices                    */
-        ZVertexSoACollection tkvertices(queue);
+        ZVertexSoACollection tkVertices(queue);
         //- - - - - - - - - - - - - - - - - - -
 
+        /* SoA for the output                    */
+        SiPixelDigisSoACollection tkOutputDigis(nDigis, queue);
+        SiPixelClustersSoACollection tkOutputClusters(nClusters, queue);
 
         // ------------- COPY FROM HOST TO DEVICE BUFFERS -------------------------------
-        alpaka::memcpy(queue, tkhit.buffer(), recHitsHandle->buffer());
-        alpaka::memcpy(queue, tkdigi.buffer(), digisHandle->buffer());
-        alpaka::memcpy(queue, tkclusters.buffer(), clustersHandle->buffer());
-        alpaka::memcpy(queue, tkvertices.buffer(), zVertexHandle->buffer());
+        // The output SoA are initialized with the input ones (in case no cluster will be split)
+        alpaka::memcpy(queue, tkHit.buffer(), recHitsHandle->buffer());
+        alpaka::memcpy(queue, tkDigi.buffer(), digisHandle->buffer());
+        alpaka::memcpy(queue, tkClusters.buffer(), clustersHandle->buffer());
+        alpaka::memcpy(queue, tkVertices.buffer(), zVertexHandle->buffer());
+        alpaka::memcpy(queue, tkOutputDigis.buffer(), digisHandle->buffer());
+        alpaka::memcpy(queue, tkOutputClusters.buffer(), clustersHandle->buffer());
+
 
 
         // Copy the Candidates into Device          
@@ -395,8 +402,7 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
             CandidatehostView.eta(i) = CandidatedataView.eta(i);
             CandidatehostView.phi(i) = CandidatedataView.phi(i);
         }
-        alpaka::memcpy(queue, tkcandidates.buffer(), CandidatehostGeometry.buffer());
-
+        alpaka::memcpy(queue, tkCandidates.buffer(), CandidatehostGeometry.buffer());
 
 
         // Copy the ClusterGeometry into Device
@@ -415,25 +421,25 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         alpaka::memcpy(queue, tkgeoclusters.buffer(), hostGeometry.buffer());
 
 
-        // Initialize SoA for Sub-Clusters
-        SiPixelDigisSoACollection tksubclusters(10, queue);
+
 
 
         alpaka::wait(queue);  // Ensure the transfer is complete
 
         // Execute the kernel
         Splitting::runKernels<pixelTopology::Phase1>(
-            tkhit.view(), tkdigi.view(), tkclusters.view(), tkvertices.view(), tkcandidates.view(), 
+            tkHit.view(), tkDigi.view(), tkClusters.view(), tkVertices.view(), tkCandidates.view(), 
             tkgeoclusters.view(), ptMin_, deltaR_, chargeFracMin_, expSizeXAtLorentzAngleIncidence_, 
-            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, chargePerUnit_, tksubclusters.view(), queue);
+            expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, centralMIPCharge_, chargePerUnit_, tkOutputDigis.view(), tkOutputClusters.view(), queue);
 
   
-        // Update from device to host (RecHits, Digis, Sub-Clusters)
-        tkhit.updateFromDevice(queue);
-        TrackingRecHitHost<pixelTopology::Phase1> hostRecHits = cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkhit);
-        SiPixelDigisHost digisHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tkdigi);
-        SiPixelDigisHost subClustersHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tksubclusters);
-        SiPixelClustersHost clustersHost = cms::alpakatools::CopyToHost<SiPixelClustersDevice<Device>>::copyAsync(queue, tkclusters);
+        // Update from device to host
+        tkHit.updateFromDevice(queue);
+        //TrackingRecHitHost<pixelTopology::Phase1> hostRecHits = cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkHit);
+        //SiPixelDigisHost digisHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tkDigi);
+        //SiPixelClustersHost clustersHost = cms::alpakatools::CopyToHost<SiPixelClustersDevice<Device>>::copyAsync(queue, tkClusters);
+        SiPixelDigisHost outputDigisHost = cms::alpakatools::CopyToHost<SiPixelDigisDevice<Device>>::copyAsync(queue, tkOutputDigis);
+        SiPixelClustersHost outputClustersHost = cms::alpakatools::CopyToHost<SiPixelClustersDevice<Device>>::copyAsync(queue, tkOutputClusters);
 
         alpaka::wait(queue);
     }
