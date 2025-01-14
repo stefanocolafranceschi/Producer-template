@@ -18,34 +18,28 @@
 
 #include <alpaka/alpaka.hpp>
 
+constexpr int maxPixels = 200;
+constexpr int maxSubClusters = 200;
+
+// This represent a per-cluster data needed in the Splitting algorithm
+struct clusterProperties {
+    float clx[maxSubClusters];
+    float cly[maxSubClusters];
+    float cls[maxSubClusters];
+    float oldclx[maxSubClusters];
+    float oldcly[maxSubClusters];
+    uint32_t pixelCounter;                // how many pixels in this Cluster
+
+    float distanceMap[maxPixels][maxSubClusters];
+    int scoresIndices[maxPixels];
+    float scoresValues[maxPixels];
+
+    float clusterForPixel[maxPixels];
+    float pixels[maxPixels];              // Storing the index of the pixel
+    float weightOfPixel[maxPixels];
+};
 
 using namespace reco;
-
-        // Cluster properties structure
-        struct ClusterProperties {
-            uint32_t minX = std::numeric_limits<uint32_t>::max();
-            uint32_t minY = std::numeric_limits<uint32_t>::max();
-            uint32_t maxX = 0;
-            uint32_t maxY = 0;
-            uint32_t charge = 0;
-
-            // Fields to store error information after splitting
-            float splitClusterErrorX = 0.0f;
-            float splitClusterErrorY = 0.0f;
-
-            // Device-compatible sizeX() and sizeY() methods
-            ALPAKA_FN_ACC uint32_t sizeX() const {
-                return maxX - minX + 1;
-            }
-
-            ALPAKA_FN_ACC uint32_t sizeY() const {
-                return maxY - minY + 1;
-            }
-
-            ALPAKA_FN_ACC float getChargeAsFloat() const {
-                return static_cast<float>(charge);
-            }
-        };
 
 namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
 
@@ -64,8 +58,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   float expSizeYAtNormalIncidence_,
                   double centralMIPCharge_,
                   double chargePerUnit_,
+                  double fractionalWidth_,
                   SiPixelDigisSoAView& outputDigis,
                   SiPixelClustersSoAView& outputClusters,
+                  clusterProperties* clusterPropertiesDevice,
                   Queue& queue);
 
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting

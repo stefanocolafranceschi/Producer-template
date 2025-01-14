@@ -235,8 +235,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                       float expSizeYAtNormalIncidence_,
                                       double centralMIPCharge_,
                                       double chargePerUnit_,
+                                      double fractionalWidth_,
                                       SiPixelDigisSoAView outputDigis,
-                                      SiPixelClustersSoAView outputClusters) const {
+                                      SiPixelClustersSoAView outputClusters,
+                                      clusterProperties* clusterPropertiesDevice) const {
 
             // Iterate over clusters
             for (uint32_t clusterIdx : cms::alpakatools::uniform_elements(acc, clusterView.metadata().size())) {
@@ -266,7 +268,8 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
 
                     // Check deltaR condition and split clusters if applicable
                     if (deltaR < deltaR_) {
-                        splitCluster(hitView,
+                        splitCluster(acc,
+                                     hitView,
                                      digiView,
                                      clusterView,
                                      clusterIdx,
@@ -279,29 +282,101 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                      expSizeYAtNormalIncidence_,
                                      centralMIPCharge_,
                                      chargePerUnit_,
+                                     fractionalWidth_,
                                      outputDigis,
-                                     outputClusters);
+                                     outputClusters,
+                                     clusterPropertiesDevice);
                     }
                 }
             }
         }
 
-        // Determines if a cluster should be split
-        ALPAKA_FN_ACC void splitCluster(TrackingRecHitSoAConstView<TrackerTraits> hitView,
-                                                       SiPixelDigisSoAConstView digiView,
-                                                       SiPixelClustersSoAConstView clusterView,
-                                                       uint32_t clusterIdx,
-                                                       float jetPx, float jetPy, float jetPz,
-                                                       float pitchX, float pitchY, float thickness,
-                                                       float tanLorentzAngles,
-                                                       double chargeFracMin_,
-                                                       float expSizeXAtLorentzAngleIncidence_,
-                                                       float expSizeXDeltaPerTanAlpha_,
-                                                       float expSizeYAtNormalIncidence_,
-                                                       double centralMIPCharge_,
-                                                       double chargePerUnit_,
-                                                       SiPixelDigisSoAView& outputDigi,
-                                                       SiPixelClustersSoAView& outputClusters) const {
+
+        ALPAKA_FN_ACC void closestClusters(clusterProperties* clusterData, int pixelIdx, float& minDist, float& secondMinDist) const {
+            minDist = std::numeric_limits<float>::max();
+            secondMinDist = std::numeric_limits<float>::max();
+
+            // Loop over all sub-clusters to calculate distance for a specific pixel
+            for (uint32_t clusterIdx = 0; clusterIdx < maxSubClusters; clusterIdx++) {
+                float dist = clusterData->distanceMap[pixelIdx][clusterIdx];  // Access the distanceMap
+
+                if (dist < minDist) {
+                    secondMinDist = minDist;
+                    minDist = dist;
+                } else if (dist < secondMinDist) {
+                    secondMinDist = dist;
+                }
+            }
+        }
+
+        ALPAKA_FN_ACC void secondDistDiffScore(clusterProperties* clusterData) const {
+            for (uint32_t pixelIdx = 0; pixelIdx < clusterData->pixelCounter; pixelIdx++) {
+                float minDist, secondMinDist;
+                // Call closestClusters to calculate minDist and secondMinDist for each pixel
+                closestClusters(clusterData, pixelIdx, minDist, secondMinDist);
+                clusterData->scoresIndices[pixelIdx] = pixelIdx;
+                clusterData->scoresValues[pixelIdx] = secondMinDist - minDist;
+            }
+        }
+
+        ALPAKA_FN_ACC void secondDistScore(clusterProperties* clusterData) const {
+            for (uint32_t pixelIdx = 0; pixelIdx < clusterData->pixelCounter; pixelIdx++) {
+                float minDist, secondMinDist;
+                // Call closestClusters to calculate minDist and secondMinDist for each pixel
+                closestClusters(clusterData, pixelIdx, minDist, secondMinDist);
+                clusterData->scoresIndices[pixelIdx] = pixelIdx;
+                clusterData->scoresValues[pixelIdx] = -secondMinDist;
+            }
+        }
+
+        ALPAKA_FN_ACC void distScore(clusterProperties* clusterData) const {
+            for (uint32_t pixelIdx = 0; pixelIdx < clusterData->pixelCounter; pixelIdx++) {
+                float minDist, secondMinDist;
+                // Call closestClusters to calculate minDist and secondMinDist for each pixel
+                closestClusters(clusterData, pixelIdx, minDist, secondMinDist);
+                clusterData->scoresIndices[pixelIdx] = pixelIdx;
+                clusterData->scoresValues[pixelIdx] = -minDist;
+            }
+        }
+
+        ALPAKA_FN_ACC void sortScores(clusterProperties* clusterData) const {
+            for (uint32_t i = 0; i < clusterData->pixelCounter - 1; i++) {
+                for (uint32_t j = 0; j < clusterData->pixelCounter - i - 1; j++) {
+                    if (clusterData->scoresValues[j] < clusterData->scoresValues[j + 1]) {  // Sort in descending order
+                        // Swap scoresValues
+                        float tempValue = clusterData->scoresValues[j];
+                        clusterData->scoresValues[j] = clusterData->scoresValues[j + 1];
+                        clusterData->scoresValues[j + 1] = tempValue;
+
+                        // Swap scoresIndices
+                        int tempIndex = clusterData->scoresIndices[j];
+                        clusterData->scoresIndices[j] = clusterData->scoresIndices[j + 1];
+                        clusterData->scoresIndices[j + 1] = tempIndex;
+                    }
+                }
+            }
+        }
+
+
+        template <typename TAcc, typename = std::enable_if_t<isAccelerator<TAcc>>>        
+        ALPAKA_FN_ACC void splitCluster(TAcc const& acc,
+                                        TrackingRecHitSoAConstView<TrackerTraits> hitView,
+                                        SiPixelDigisSoAConstView digiView,
+                                        SiPixelClustersSoAConstView clusterView,
+                                        uint32_t clusterIdx,
+                                        float jetPx, float jetPy, float jetPz,
+                                        float pitchX, float pitchY, float thickness,
+                                        float tanLorentzAngles,
+                                        double chargeFracMin_,
+                                        float expSizeXAtLorentzAngleIncidence_,
+                                        float expSizeXDeltaPerTanAlpha_,
+                                        float expSizeYAtNormalIncidence_,
+                                        double centralMIPCharge_,
+                                        double chargePerUnit_,
+                                        double fractionalWidth_,
+                                        SiPixelDigisSoAView& outputDigi,
+                                        SiPixelClustersSoAView& outputClusters,
+                                        clusterProperties* clusterPropertiesDevice) const {
 
             bool split = false;
             float jetTanAlpha = jetPx / jetPz;
@@ -329,27 +404,152 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                 // Aligning to the original "fittingSplit" variables
                 int sizeY = expSizeY;
                 int sizeX = expSizeX;
+                clusterPropertiesDevice[clusterIdx].pixelCounter = digiView.metadata().size();
+
                 unsigned int meanExp = std::floor( hitView[clusterIdx].chargeAndStatus().charge / expectedADC + 0.5f);
 
- 
+                if (meanExp <= 1) return;
+    
 
-                constexpr unsigned int MAX_SPLIT_CLUSTERS = 128;
-                float clx[MAX_SPLIT_CLUSTERS];
-                float cly[MAX_SPLIT_CLUSTERS];
-                float cls[MAX_SPLIT_CLUSTERS];
-                float oldclx[MAX_SPLIT_CLUSTERS];
-                float oldcly[MAX_SPLIT_CLUSTERS];
+                // Splitting the pixels and writing them into outputDigi for the current clusterIdx
+                for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
+                    // Check if the pixel belongs to the current cluster (clusterIdx)
+                    if (static_cast<uint32_t>(digiView[j].clus()) == clusterIdx) {
+                        int sub = static_cast<int>(digiView[j].adc()) / chargePerUnit_ * expectedADC / centralMIPCharge_;
+                        if (sub < 1) sub = 1;
+                        int perDiv = digiView[j].adc() / sub;
 
-                // REST OF THE SPLITTING ALGORITHM TO BE IMPLEMENTED..
+                        // Iterate over the sub-clusters (split pixels)
+                        for (int k = 0; k < sub; k++) {
+                            if (k == sub - 1) perDiv = digiView[j].adc() - perDiv * k;  // Adjust for the last pixel
 
+                            // Use atomicAdd to ensure pixels are added correctly to pixelCounter
+                            uint32_t idx = alpaka::atomicAdd(acc, &(clusterPropertiesDevice[clusterIdx].pixelCounter), uint32_t(1));
+
+                            // Write the new split pixels into outputDigi at the obtained index
+                            outputDigi[idx].clus() = clusterIdx;  // Assign cluster ID
+                            outputDigi[idx].xx() = digiView[j].xx(); // Copy x-coordinate from original pixel
+                            outputDigi[idx].yy() = digiView[j].yy(); // Copy y-coordinate from original pixel
+                            outputDigi[idx].adc() = perDiv;       // Assign divided charge (ADC)
+                            outputDigi[idx].rawIdArr() = digiView[j].rawIdArr(); // Copy raw ID from original pixel
+                            outputDigi[idx].moduleId() = digiView[j].moduleId(); // Copy module ID from original pixel
+
+                            // Update the clusterPropertiesDevice with the pixel index (j)
+                            clusterPropertiesDevice[clusterIdx].pixels[idx] = j;
+                        }
+                    }
+                }
+
+
+                // Compute the initial values, set all distances and centers to -999
+                for (unsigned int j = 0; j < meanExp; j++) {
+                    clusterPropertiesDevice[clusterIdx].oldclx[j] = -999;
+                    clusterPropertiesDevice[clusterIdx].oldcly[j] = -999;
+                    clusterPropertiesDevice[clusterIdx].clx[j] = hitView[0].xLocal() + j;
+                    clusterPropertiesDevice[clusterIdx].cly[j] = hitView[0].xLocal() + j;
+                    clusterPropertiesDevice[clusterIdx].cls[j] = 0;
+                }
+                bool stop = false;
+                int remainingSteps = 100;
+
+                while (!stop && remainingSteps > 0) {
+                    remainingSteps--;
+
+                    // Compute distances
+                    for (uint32_t j : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
+                        if (j >= maxPixels) continue; // Safety check for bounds
+
+                        for (unsigned int i = 0; i < meanExp; i++) {
+                            if (i >= maxSubClusters) continue; // Safety check for bounds
+
+                            // Calculate the distance in X and Y for each cluster
+                            float distanceX = 1.f * digiView[j].xx() - clusterPropertiesDevice[clusterIdx].clx[i];
+                            float distanceY = 1.f * digiView[j].yy() - clusterPropertiesDevice[clusterIdx].cly[i];
+                            float dist = 0;
+
+                            if (std::abs(distanceX) > sizeX / 2.f) {
+                                dist += (std::abs(distanceX) - sizeX / 2.f + 1.f) * (std::abs(distanceX) - sizeX / 2.f + 1.f);
+                            } else {
+                                dist += (2.f * distanceX / sizeX) * (2.f * distanceX / sizeX);
+                            }
+
+                            if (std::abs(distanceY) > sizeY / 2.f) {
+                                dist += (std::abs(distanceY) - sizeY / 2.f + 1.f) * (std::abs(distanceY) - sizeY / 2.f + 1.f);
+                            } else {
+                                dist += (2.f * distanceY / sizeY) * (2.f * distanceY / sizeY);
+                            }
+
+                            // Store the computed distance in the 2D array
+                            clusterPropertiesDevice[clusterIdx].distanceMap[j][i] = sqrt(dist);
+                        }
+                    }
+
+                    secondDistScore(clusterPropertiesDevice);
+                    // In the original code:
+                    // - the first index is the distance, in whatever metrics we use, 
+                    // - the second is the pixel index w.r.t which the distance is computed.
+                    //std::multimap < float, int > scores;
+                    // In this code the first index is in scoresIndices, the second in scoresValues
+                    // to mimic the multimap, I score manually both arrays
+                    sortScores(clusterPropertiesDevice);
+
+
+                    
+                    // Iterating over Scores Indices and Values
+                    for (unsigned int i = 0; i < clusterPropertiesDevice[clusterIdx].pixelCounter; i++) {
+
+                        int pixel_index = clusterPropertiesDevice[clusterIdx].scoresIndices[i];
+                        float score_value = clusterPropertiesDevice[clusterIdx].scoresValues[i];
+
+                        int subpixel_counter = 0;
+
+
+                        // Iterating over Pixels
+                        for (unsigned int subpixel = 0; subpixel < clusterPropertiesDevice[clusterIdx].pixelCounter; subpixel++) {
+                            if (clusterPropertiesDevice[clusterIdx].pixels[subpixel] > pixel_index) {
+                                break;
+                            } else if (clusterPropertiesDevice[clusterIdx].pixels[subpixel] != pixel_index) {
+                                continue;
+                            } else {
+                                float maxEst = 0;
+                                int cl = -1;
+
+                                // Iterating over subclusters to calculate the best fit
+                                for (unsigned int subcluster_index = 0; subcluster_index < meanExp; subcluster_index++) {
+                                    float nsig = (clusterPropertiesDevice[clusterIdx].cls[subcluster_index] - expectedADC) /
+                                        (expectedADC * fractionalWidth_); 
+                                    float clQest = 1.f / (1.f + std::exp(nsig)) + 1e-6f; 
+                                    float clDest = 1.f / (clusterPropertiesDevice[clusterIdx].distanceMap[pixel_index][subcluster_index] + 0.05f);
+
+                                    float est = clQest * clDest;
+                                    if (est > maxEst) {
+                                        cl = subcluster_index;
+                                        maxEst = est;
+                                    }
+                                }
+
+                                // Use atomicAdd to safely update cls
+                                uint32_t idx = alpaka::atomicAdd(acc, &(clusterPropertiesDevice[clusterIdx].cls[cl]), static_cast<float>(outputDigi[subpixel].adc()));
+
+                                // Updating other cluster properties
+                                clusterPropertiesDevice[clusterIdx].clusterForPixel[subpixel_counter] = cl;
+                                clusterPropertiesDevice[clusterIdx].weightOfPixel[subpixel_counter] = maxEst;
+                                subpixel_counter++;
+                            }
+                        }
+                    }
+                    // Recompute cluster centers
+                    stop = true;
+
+
+
+
+
+
+
+                }
             }
-
         }
-
-
-
-
-
     };
 
 
@@ -369,8 +569,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                     float expSizeYAtNormalIncidence_,
                     double centralMIPCharge_,
                     double chargePerUnit_,
+                    double fractionalWidth_,
                     SiPixelDigisSoAView& outputDigis,                    
                     SiPixelClustersSoAView& outputClusters,
+                    clusterProperties* clusterPropertiesDevice,
                     Queue& queue) {
 
 
@@ -402,8 +604,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                     expSizeYAtNormalIncidence_,
                                     centralMIPCharge_,
                                     chargePerUnit_,
+                                    fractionalWidth_,
                                     outputDigis,
-                                    outputClusters);
+                                    outputClusters,
+                                    clusterPropertiesDevice);
             }
 
     // Explicit template instantiation for Phase 1
@@ -421,8 +625,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     float expSizeYAtNormalIncidence_,
                                                     double centralMIPCharge_,
                                                     double chargePerUnit_,
+                                                    double fractionalWidth_,
                                                     SiPixelDigisSoAView& outputDigis,
                                                     SiPixelClustersSoAView& outputClusters,
+                                                    clusterProperties* clusterPropertiesDevice,
                                                     Queue& queue);
 
     // Explicit template instantiation for Phase 2
@@ -440,8 +646,10 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                                                     float expSizeYAtNormalIncidence_,
                                                     double centralMIPCharge_,
                                                     double chargePerUnit_,
+                                                    double fractionalWidth_,
                                                     SiPixelDigisSoAView& outputDigis,
                                                     SiPixelClustersSoAView& outputClusters,
+                                                    clusterProperties* clusterPropertiesDevice,                                                    
                                                     Queue& queue);
 
     
