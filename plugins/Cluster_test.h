@@ -21,6 +21,8 @@
 constexpr int maxPixels = 200;
 constexpr int maxSubClusters = 200;
 
+bool verbose = true;
+
 // This represent a per-cluster data needed in the Splitting algorithm
 struct clusterProperties {
     float clx[maxSubClusters];
@@ -34,8 +36,8 @@ struct clusterProperties {
     int scoresIndices[maxPixels];
     float scoresValues[maxPixels];
 
-    float clusterForPixel[maxPixels];
-    float pixels[maxPixels];              // Storing the index of the pixel
+    int clusterForPixel[maxPixels];
+    int pixels[maxPixels];              // Storing the index of the pixel
     float weightOfPixel[maxPixels];
 };
 

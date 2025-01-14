@@ -291,7 +291,6 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
             }
         }
 
-
         ALPAKA_FN_ACC void closestClusters(clusterProperties* clusterData, int pixelIdx, float& minDist, float& secondMinDist) const {
             minDist = std::numeric_limits<float>::max();
             secondMinDist = std::numeric_limits<float>::max();
@@ -404,11 +403,27 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                 // Aligning to the original "fittingSplit" variables
                 int sizeY = expSizeY;
                 int sizeX = expSizeX;
-                clusterPropertiesDevice[clusterIdx].pixelCounter = digiView.metadata().size();
 
                 unsigned int meanExp = std::floor( hitView[clusterIdx].chargeAndStatus().charge / expectedADC + 0.5f);
 
-                if (meanExp <= 1) return;
+                if (meanExp <= 1) {
+
+                    // Use atomicAdd to ensure pixels are added correctly to pixelCounter
+                    uint32_t idx = alpaka::atomicAdd(acc, &(clusterPropertiesDevice[clusterIdx].pixelCounter), uint32_t(1));
+
+                    // Iterate over all digis to find those belonging to the current cluster
+                    for (uint32_t pixel : cms::alpakatools::uniform_elements(acc, digiView.metadata().size())) {
+                        if (static_cast<uint32_t>(digiView[pixel].clus()) == clusterIdx) { // Fixed comparison
+                            outputDigi[idx].clus() = clusterIdx;
+                            outputDigi[idx].xx() = digiView[pixel].xx();
+                            outputDigi[idx].yy() = digiView[pixel].yy();
+                            outputDigi[idx].adc() = digiView[pixel].adc();
+                            outputDigi[idx].rawIdArr() = digiView[pixel].rawIdArr(); // Copy raw ID from original pixel
+                            outputDigi[idx].moduleId() = digiView[pixel].moduleId(); // Copy module ID from original pixel
+                        }      
+                    }
+                    return;                    
+                }
     
 
                 // Splitting the pixels and writing them into outputDigi for the current clusterIdx
@@ -504,7 +519,7 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                         int subpixel_counter = 0;
 
 
-                        // Iterating over Pixels
+                        // Iterating over subpixels
                         for (unsigned int subpixel = 0; subpixel < clusterPropertiesDevice[clusterIdx].pixelCounter; subpixel++) {
                             if (clusterPropertiesDevice[clusterIdx].pixels[subpixel] > pixel_index) {
                                 break;
@@ -538,16 +553,140 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE {
                             }
                         }
                     }
+
+
                     // Recompute cluster centers
                     stop = true;
+                    for (unsigned int subcluster_index = 0; subcluster_index < meanExp; subcluster_index++) {
+                        if (std::abs(clusterPropertiesDevice[clusterIdx].clx[subcluster_index] - clusterPropertiesDevice[clusterIdx].oldclx[subcluster_index]) > 0.01f)
+                            stop = false; // still moving
+                        if (std::abs(clusterPropertiesDevice[clusterIdx].cly[subcluster_index] - clusterPropertiesDevice[clusterIdx].oldcly[subcluster_index]) > 0.01f)
+                            stop = false;
+                        clusterPropertiesDevice[clusterIdx].oldclx[subcluster_index] = clusterPropertiesDevice[clusterIdx].clx[subcluster_index];
+                        clusterPropertiesDevice[clusterIdx].oldcly[subcluster_index] = clusterPropertiesDevice[clusterIdx].cly[subcluster_index];
+                        clusterPropertiesDevice[clusterIdx].clx[subcluster_index] = 0;
+                        clusterPropertiesDevice[clusterIdx].cly[subcluster_index] = 0;
+                        clusterPropertiesDevice[clusterIdx].cls[subcluster_index] = 1e-99;
+                    }
 
 
-
-
-
-
-
+                    for (unsigned int pixel_index = 0; pixel_index < clusterPropertiesDevice[clusterIdx].pixelCounter; pixel_index++) {
+                        if (clusterPropertiesDevice[clusterIdx].clusterForPixel[pixel_index] < 0)
+                            continue;
+                        // A little unsure about the right hand side of this assignement...
+                        clusterPropertiesDevice[clusterIdx].clx[clusterPropertiesDevice[clusterIdx].clusterForPixel[pixel_index]] += outputDigi[pixel_index].xx() * outputDigi[pixel_index].adc();
+                        clusterPropertiesDevice[clusterIdx].cly[clusterPropertiesDevice[clusterIdx].clusterForPixel[pixel_index]] += outputDigi[pixel_index].yy() * outputDigi[pixel_index].adc();;
+                        clusterPropertiesDevice[clusterIdx].cls[clusterPropertiesDevice[clusterIdx].clusterForPixel[pixel_index]] += outputDigi[pixel_index].adc();
+                    }
+                    for (unsigned int subcluster_index = 0; subcluster_index < meanExp; subcluster_index++) {
+                        if (clusterPropertiesDevice[clusterIdx].cls[subcluster_index] != 0) {
+                            clusterPropertiesDevice[clusterIdx].clx[subcluster_index] /= clusterPropertiesDevice[clusterIdx].cls[subcluster_index];
+                            clusterPropertiesDevice[clusterIdx].cly[subcluster_index] /= clusterPropertiesDevice[clusterIdx].cls[subcluster_index];
+                        }
+                        clusterPropertiesDevice[clusterIdx].cls[subcluster_index] = 0;
+                    }
                 }
+
+                //BEGIN: this part comes from the old code should be ADJUSTED -----
+
+// Accumulate pixels for the same cluster
+for (unsigned int cl = 0; cl < meanExp; cl++) {
+    for (uint32_t pixelIdx : cms::alpakatools::uniform_elements(acc, clusterPropertiesDevice[clusterIdx].pixelCounter)) {
+        if (clusterPropertiesDevice[clusterIdx].clusterForPixel[pixelIdx] == cl && outputDigi[pixelIdx].adc() != 0) {
+            // For each pixel in cluster `cl`, find and accumulate ADCs from overlapping pixels
+            for (uint32_t nextPixelIdx = pixelIdx + 1; nextPixelIdx < clusterPropertiesDevice[clusterIdx].pixelCounter; nextPixelIdx++) {
+                if (outputDigi[nextPixelIdx].adc() != 0 &&
+                    outputDigi[nextPixelIdx].xx() == outputDigi[pixelIdx].xx() &&
+                    outputDigi[nextPixelIdx].yy() == outputDigi[pixelIdx].yy() &&
+                    clusterPropertiesDevice[clusterIdx].clusterForPixel[nextPixelIdx] == cl) {
+                    
+                    if (verbose) {
+                        printf("Resetting overlapping pixel (%d, %d) at index %u associated to cluster %u\n",
+                               outputDigi[nextPixelIdx].xx(), outputDigi[nextPixelIdx].yy(),
+                               nextPixelIdx, cl);
+                    }
+
+                    // Accumulate ADC values and reset the overlapping pixel
+                    outputDigi[pixelIdx].adc() += outputDigi[nextPixelIdx].adc();
+                    outputDigi[nextPixelIdx].adc() = 0;
+                }
+            }
+
+            // Debugging output for pixels
+            if (verbose) {
+                for (uint32_t p = 0; p < clusterPropertiesDevice[clusterIdx].pixelCounter; ++p) {
+                    printf("Index %u: x = %d, y = %d, ADC = %d, Cluster = %u\n",
+                           p, outputDigi[p].xx(), outputDigi[p].yy(),
+                           outputDigi[p].adc(),
+                           clusterPropertiesDevice[clusterIdx].clusterForPixel[p]);
+                }
+            }
+
+            // Assign the pixel to its cluster
+            //uint32_t idx = alpaka::atomicAdd(acc, &(clusterPropertiesDevice[clusterIdx].finalClusterCounter[cl]), uint32_t(1));
+//            clusterPropertiesDevice[clusterIdx].finalPixels[cl][idx] = outputDigi[pixelIdx];
+// this part should be fixed up
+
+
+
+        }
+    }
+}
+
+// Process finalized pixels for each cluster
+// Accumulate pixels and directly populate output
+for (int cl = 0; cl < static_cast<int>(meanExp); cl++) {
+    for (unsigned int j = 0; j < clusterPropertiesDevice[clusterIdx].pixelCounter; j++) {
+        if (clusterPropertiesDevice[clusterIdx].clusterForPixel[j] == cl && outputDigi[j].adc() != 0) { // For each pixel in cluster cl
+            // Accumulate ADC values for pixels with the same (x, y) within the cluster
+            for (unsigned int k = j + 1; k < clusterPropertiesDevice[clusterIdx].pixelCounter; k++) {
+                if (outputDigi[k].adc() != 0 &&
+                    outputDigi[k].xx() == digiView[j].xx() &&
+                    outputDigi[k].yy() == digiView[j].yy() &&
+                    clusterPropertiesDevice[clusterIdx].clusterForPixel[k] == cl) {
+                    if (verbose) {
+                        std::cout << "Resetting all sub-pixel for location " << pixels[k].second.x << ", " 
+                                  << pixels[k].second.y << " at index " << k 
+                                  << " associated to cl " << clusterForPixel[k] << std::endl;
+                    }
+                    outputDigi[j].adc() += outputDigi[k].adc();
+                    outputDigi[k].adc() = 0; // Reset accumulated pixel
+                }
+            }
+/*
+            // Create or update clusters directly in the output
+            SiPixelCluster::PixelPos newpix(pixels[j].second.x, pixels[j].second.y);
+            if (output.empty() || output.back().cluster() != cl) {
+                // Create a new cluster if starting a new one
+                output.emplace_back(newpix, pixels[j].second.adc);
+            } else {
+                // Add to the existing cluster
+                output.back().add(newpix, pixels[j].second.adc);
+            }
+*/
+            if (verbose) {
+                std::cout << "Adding pixel " << pixels[j].second.x << ", " << pixels[j].second.y 
+                          << " with ADC " << pixels[j].second.adc 
+                          << " to cluster " << cl << std::endl;
+            }
+        }
+    }
+/*
+    // Set cluster errors if required
+    if (!output.empty() && output.back().cluster() == cl) {
+        if (forceXError_ > 0) {
+            output.back().setSplitClusterErrorX(forceXError_);
+        }
+        if (forceYError_ > 0) {
+            output.back().setSplitClusterErrorY(forceYError_);
+        }
+    }
+
+    */
+}
+                //END: old code part ---------------------------------
+
+
             }
         }
     };
