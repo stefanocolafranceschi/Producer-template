@@ -97,6 +97,8 @@ private:
   float expSizeYAtNormalIncidence_;
   double centralMIPCharge_;
   double chargePerUnit_;
+  double forceXError_;
+  double forceYError_;  
   double fractionalWidth_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection> clusterToken_;
   edm::EDGetTokenT<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection> digisToken_;
@@ -124,6 +126,8 @@ trial::trial(const edm::ParameterSet& iConfig)
       expSizeYAtNormalIncidence_(iConfig.getParameter<double>("expSizeYAtNormalIncidence")),
       centralMIPCharge_(iConfig.getParameter<double>("centralMIPCharge")),
       chargePerUnit_(iConfig.getParameter<double>("chargePerUnit_")),
+      forceXError_(iConfig.getParameter < double > ("forceXError")),
+      forceYError_(iConfig.getParameter < double > ("forceYError")),      
       fractionalWidth_(iConfig.getParameter < double > ("fractionalWidth")),      
       clusterToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelClustersSoACollection>(edm::InputTag("siPixelClusters"))),
       digisToken_(consumes<ALPAKA_ACCELERATOR_NAMESPACE::SiPixelDigisSoACollection>(edm::InputTag("SiPixelDigisSoA"))),
@@ -430,8 +434,10 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         std::copy(gpuAlgo.begin(), gpuAlgo.end(), clusterPropertiesHost.data());
         alpaka::memcpy(queue, clusterPropertiesDevice, clusterPropertiesHost);
 
-        alpaka::wait(queue);  // Ensure the transfer is complete
+        // Handling a global counter of the output (new) clusters (initialized in the kernel)
+        auto clusterCounterDevice = cms::alpakatools::make_device_buffer<uint32_t>(queue);
 
+        alpaka::wait(queue);  // Ensure the transfer is complete
 
         // Execute the kernel
         Splitting::runKernels<pixelTopology::Phase1>(
@@ -439,12 +445,14 @@ void trial::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
             tkgeoclusters.view(), ptMin_, deltaR_, chargeFracMin_, 
             expSizeXAtLorentzAngleIncidence_, expSizeXDeltaPerTanAlpha_, expSizeYAtNormalIncidence_, 
             centralMIPCharge_, chargePerUnit_, fractionalWidth_, 
-            tkOutputDigis.view(), tkOutputClusters.view(), clusterPropertiesDevice.data(), queue);
+            tkOutputDigis.view(), tkOutputClusters.view(), 
+            clusterPropertiesDevice.data(), clusterCounterDevice.data(),
+            forceXError_, forceYError_, queue);
 
 
         // Update from device to host
-//alpaka::memcpy(queue, gpuSharedHost, gpuSharedDevice);  // Copy device buffer to host buffer
-//alpaka::wait(queue);  // Ensure the transfer is complete
+        //alpaka::memcpy(queue, gpuSharedHost, gpuSharedDevice);  // Copy device buffer to host buffer
+        //alpaka::wait(queue);  // Ensure the transfer is complete
         tkHit.updateFromDevice(queue);
 
         //TrackingRecHitHost<pixelTopology::Phase1> hostRecHits = cms::alpakatools::CopyToHost<TrackingRecHitDevice<pixelTopology::Phase1, Device>>::copyAsync(queue, tkHit);

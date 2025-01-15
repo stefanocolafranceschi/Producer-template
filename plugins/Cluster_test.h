@@ -21,8 +21,6 @@
 constexpr int maxPixels = 200;
 constexpr int maxSubClusters = 200;
 
-bool verbose = true;
-
 // This represent a per-cluster data needed in the Splitting algorithm
 struct clusterProperties {
     float clx[maxSubClusters];
@@ -30,14 +28,24 @@ struct clusterProperties {
     float cls[maxSubClusters];
     float oldclx[maxSubClusters];
     float oldcly[maxSubClusters];
+
     uint32_t pixelCounter;                // how many pixels in this Cluster
+    float pixel_X[maxPixels];
+    float pixel_Y[maxPixels];
+    float pixel_ADC[maxPixels];
+    int pixels[maxPixels];              // Storing the index of the pixel
+
+    uint32_t pixelsForClCounter;                // how many pixels in this Cluster
+    float pixelsForCl_X[maxPixels];
+    float pixelsForCl_Y[maxPixels];
+    float pixelsForCl_ADC[maxPixels];
+    int pixelsForCl[maxPixels];              // Storing the index of the pixel
 
     float distanceMap[maxPixels][maxSubClusters];
     int scoresIndices[maxPixels];
     float scoresValues[maxPixels];
 
     int clusterForPixel[maxPixels];
-    int pixels[maxPixels];              // Storing the index of the pixel
     float weightOfPixel[maxPixels];
 };
 
@@ -64,6 +72,9 @@ namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting {
                   SiPixelDigisSoAView& outputDigis,
                   SiPixelClustersSoAView& outputClusters,
                   clusterProperties* clusterPropertiesDevice,
+                  uint32_t* clusterCounterDevice,
+                  double forceXError_,
+                  double forceYError_,
                   Queue& queue);
 
 }  // namespace ALPAKA_ACCELERATOR_NAMESPACE::Splitting
